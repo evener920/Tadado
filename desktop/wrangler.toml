@@ -1,0 +1,8 @@
+name = "tadado"
+compatibility_date = "2026-09-28"
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tadado"
+database_id = "6c3ef8e6-ac21-44e7-9d19-ec2ead9f0b6b"

@@ -163,6 +163,24 @@ export function renamePartition(id: string, name: string): void {
  *
  * 任务迁移交给调用方：这里在 data 层，不能反过来 import mock 里的 TASKS。
  */
+
+/** 同步用：合并云端分区。已有同 id 的本地分区保留本地名称，新分区追加到本地。 */
+export function mergeSyncedPartitions(remote: Partition[]): void {
+  const byId = new Map(PARTITIONS.map((p) => [p.id, p]));
+  let changed = false;
+  for (const item of remote) {
+    if (!item || typeof item.id !== "string" || typeof item.name !== "string") continue;
+    if (!byId.has(item.id)) {
+      PARTITIONS.push({ id: item.id, name: item.name });
+      changed = true;
+    }
+  }
+  if (changed) {
+    persist();
+    emitList();
+  }
+}
+
 export function removePartition(id: string): boolean {
   if (PARTITIONS.length <= 1) return false;
   const index = PARTITIONS.findIndex((partition) => partition.id === id);

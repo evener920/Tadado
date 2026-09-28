@@ -10,6 +10,8 @@ import { storageIssue } from "./data/db";
 import { bootPartitions } from "./data/partitions";
 import { bootStore } from "./data/store";
 import { setupHotkey } from "./shell/hotkey";
+import { mountAccount } from "./shell/account";
+import { bootSync } from "./data/sync";
 import { bootLock } from "./shell/lock";
 import { mountNav } from "./shell/nav";
 import { mountPartition } from "./shell/partition";
@@ -43,6 +45,8 @@ async function boot(): Promise<void> {
   mountNav();
   mountPartition();
   mountSettings();
+  mountAccount();
+  void bootSync();
 
   // 存储出问题了要说出来：以前这种情况是「静静地降级 / 静静地空库」，
   // 用户看到的是「我的任务全没了」，然后开始怀疑自己 —— 而数据其实还在

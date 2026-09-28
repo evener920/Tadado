@@ -675,3 +675,61 @@
 }
 
 
+
+
+/* ── 账号 / 云同步 ───────────────────────────────────────── */
+.tb-account {
+  flex: none;
+  height: 26px;
+  min-width: 48px;
+  padding: 0 9px;
+  margin: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: 500 11px var(--font);
+  cursor: pointer;
+}
+.tb-account:hover { background: var(--hover); color: var(--text); }
+
+.account-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,.28);
+  backdrop-filter: blur(2px);
+}
+.account-card {
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 18px 60px rgba(0,0,0,.18);
+}
+.account-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+.account-head b { font-size:15px; }
+.account-x { border:0; background:none; color:var(--text-3); font-size:22px; cursor:pointer; line-height:1; }
+.account-tabs { display:flex; gap:4px; margin-bottom:14px; border-bottom:1px solid var(--border); }
+.account-tabs button { border:0; background:none; padding:7px 12px; color:var(--text-3); cursor:pointer; font:500 12px var(--font); }
+.account-tabs button.active { color:var(--text); box-shadow:inset 0 -2px var(--accent); }
+#account-form { display:flex; flex-direction:column; gap:12px; }
+#account-form label { display:flex; flex-direction:column; gap:5px; font-size:11px; color:var(--text-2); }
+#account-form input {
+  box-sizing:border-box; width:100%; height:36px; padding:0 10px;
+  border:1px solid var(--border); border-radius:8px; outline:none;
+  background:var(--surface-2); color:var(--text); font:13px var(--font);
+}
+#account-form input:focus { border-color:var(--accent); }
+.btn-primary,.btn-plain { height:36px; padding:0 14px; border-radius:8px; cursor:pointer; font:500 12px var(--font); }
+.btn-primary { border:1px solid var(--accent); background:var(--accent); color:#fff; }
+.btn-plain { border:1px solid var(--border); background:var(--surface-2); color:var(--text-2); }
+.account-actions { display:flex; gap:8px; margin-top:14px; }
+.account-user { font-size:13px; font-weight:600; margin-bottom:8px; overflow:hidden; text-overflow:ellipsis; }
+.account-note { margin-top:10px; color:var(--text-3); font-size:10.5px; line-height:1.6; }
+.account-error { min-height:16px; color:var(--danger); font-size:11px; }
