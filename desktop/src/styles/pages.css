@@ -902,9 +902,17 @@
   position: absolute;
   top: 0;
   bottom: 0;
+  /* 与表头那格**同一个颜色**：整列从表头到底是一块料。
+     试过降到 75% 透明度，浅色下与周末那条灰带（--bg-2）明度太接近，反而分不出哪条是「今天」 */
   background: var(--accent-soft);
-  opacity: 0.75;
   pointer-events: none;
+}
+
+/* 选中行的整条 `.tt-track` 本来就是 accent-soft，今天这列会跟它糊成一片 ——
+   叠一层更实的强调色把这列重新区分出来 */
+.tt-row.selected .tt-colband {
+  background: var(--accent);
+  opacity: 0.16;
 }
 
 /* 行内那块要往**下**多铺 2px，盖住行自己的 border-bottom —— 否则每一行交界处
