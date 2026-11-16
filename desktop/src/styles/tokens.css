@@ -34,6 +34,9 @@
   --accent: #4c56c0;
   --accent-h: #40499f;
   --accent-soft: #e8e9f7;
+  /* 当日整列。比 accent-soft 更蓝更亮：accent-soft 落在暖纸色（--surface）上会显得发灰，
+     用户 2026-11-16 的原话是「当日应该更鲜亮，而不是灰暗的」 */
+  --today-tint: #d6dcff;
 
   /* ── 描边 ── */
   --border: #e3dfd3;
@@ -117,6 +120,8 @@
   --accent: #7b83e8;
   --accent-h: #939af1;
   --accent-soft: #262a4d;
+  /* 深色下同样往「更亮更蓝」抬一档，否则整列高亮会沉进面板底色 */
+  --today-tint: #2f3568;
   --border: #2e2f3e;
   --border-2: #3b3c4c;
   --danger: #e26b5b;
@@ -150,6 +155,8 @@
     --accent: #7b83e8;
     --accent-h: #939af1;
     --accent-soft: #262a4d;
+    /* 深色下同样往「更亮更蓝」抬一档，否则整列高亮会沉进面板底色 */
+    --today-tint: #2f3568;
     --border: #2e2f3e;
     --border-2: #3b3c4c;
     --danger: #e26b5b;

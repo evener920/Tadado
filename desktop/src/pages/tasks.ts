@@ -1,21 +1,23 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // 任务页：时间轴表格（甘特）。
 //
-// **窗口三档**（`GANTT_RANGES`，2026-11-16 加的：周 / 14 天 / 月，默认月）：
-// 窗口不按任务跨度撑开 —— 它只回答「这一屏是哪一段」，看别的时间段靠**在表格上拖动**
-// （按天吸附）。切档改的是这一段有多宽，不是换筛选。
-// （工具行那排「全部 / 昨天 / 今天 / 上周…」档位 2026-09-21 撤了，理由见 `focusAnchor`。）
+// **时间轴连续可滚 + 三档缩放**（`GANTT_RANGES`：周 / 14 天 / 月，默认月）：
+// 时间轴固定铺 365 天（`GANTT_SPAN`，今天前后各半年），翻日期靠 `.tt-scroll` 的
+// **原生横向滚动**；三档只管「一屏放几天」（＝列宽），不改筛选、也不改时间轴长度。
+// （2026-11-16 晚用户的口径：「我希望日期可以滚动，而不是固定的」——早先那套「窗口 =
+// 档位天数 + 按住拖动平移」随之撤掉：窗口等于一屏时横向一像素都滚不动。）
+// （工具行那排「全部 / 昨天 / 今天 / 上周…」档位 2026-09-21 撤了，理由见 `focusDay`。）
 // 条形的时间基准是**创建日 → 截止日**；条是**整块实色**（颜色只编码状态），**不画进度** ——
 // 进度在行首那枚**进度饼**、悬停小卡与条内那枚白字进度里（理由见 `renderRow` 那一段）。
 //
-// 左侧任务列吸附（拖动/滚动时留在原地），右侧是按日展开的格子。日期格线不是 DOM
-// 节点而是 repeating-linear-gradient —— 月档 32 天 × 28 行会多出近 900 个只用来画线的
-// div，而线宽和列宽本来就同源，交给 CSS 更准也更快（列宽经 `--tt-col` 一处下发给
-// 表头与格线）。
+// 左侧任务列吸附（滚动时留在原地），右侧是按日展开的格子。日期格线不是 DOM
+// 节点而是 repeating-linear-gradient —— 一天一格的话，365 天 × 28 行要多出上万个
+// 只用来画线的 div，而线宽和列宽本来就同源，交给 CSS 更准也更快（列宽经 `--tt-col`
+// 一处下发给表头与格线）。
 //
 // 工具行（标签筛选 / 计数 / 排序）在 mount 里建一次就常驻，只有 chips 里的
 // 数字和下面的表格随数据重建 —— 否则每次筛选都要把下拉重新造一遍，
-// 展开状态和连点体验都会断。拖动平移的监听也挂在 mount 里建的那层（`.tt-box`）：
+// 展开状态和连点体验都会断。滚动的监听也挂在 mount 里建的那层（`.tt-box`）：
 // `.tt-scroll` 每次 render 都被换掉，挂上去活不过第一帧。
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -80,10 +82,12 @@ const LABEL_W = 256;
 const COL_MIN = 15;
 
 /**
- * 甘特时间跨度（2026-11-16 用户定的）：**周 / 14 天 / 月**三档，默认仍是月（32 天）。
+ * 甘特「一屏放几天」：**周 / 14 天 / 月**三档，默认月。
  *
- * 原来是写死的 32 天，看一周得拖半天；现在在工具行上直接切档。天数仍不随数据撑开 ——
- * 看别的时间段靠拖动（见 mount 里的拖动平移），切档只改变「这一屏有多宽」。
+ * ⚠️ 2026-11-16 晚用户改了口径（原话「我希望日期可以滚动，而不是固定的」）：这三档
+ * 不再决定**时间轴有多长**，只决定**一屏能放几天**（＝列宽）。时间轴本身固定铺
+ * `GANTT_SPAN` 天，横向原生滚动，滚到哪天看哪天 —— 以前窗口正好等于档位天数，
+ * 横向没有一像素可滚量，翻日期只能靠在表格上拖动（一次挪几天，跳下个月要拖十几下）。
  */
 const GANTT_RANGES = [
   { value: "7", label: "周" },
@@ -94,65 +98,74 @@ type GanttRange = (typeof GANTT_RANGES)[number]["value"];
 type GanttDays = 7 | 14 | 32;
 let ganttDays: GanttDays = 32;
 
-/** 把任意一天归到它所在那一周的周一（UTC：周日 0 → 往前退 6 天）。 */
-function mondayOf(day: number): number {
-  return day - ((new Date(day * DAY_MS).getUTCDay() + 6) % 7);
-}
-
 /**
- * 窗口左端：以 `day` 为参照给窗口定位。
+ * 时间轴总跨度（天）：固定 **365 天**（今天前 182 + 今天 + 后 182）。
  *
- * 周 / 14 天档**从周一开始**（2026-11-16 用户定的）：7 天 = 周一到周日，
- * 14 天 = 连续两周。参照点离今天不到一档时直接用今天所在周 —— 否则月切周时
- * 中心落在周日，新窗口会把今天整甩到右边（截图里周四到周三就是这么来的）。
- *
- * 月档仍是滚动的 32 天，今天居中：32 没法两侧各 16 天，取整偏给**过去**
- * （已发生的事实要一直看得见），所以 = 前 16 天 + 今天 + 后 15 天。
+ * 不随数据撑开，也不随档位变 —— 它只回答「这条时间轴有多长」。一年足够日常前后翻，
+ * 又不会把表头铺到上万格（每格两个 span，一年也就 730 个左右）。
  */
-function anchorFor(day: number): number {
-  if (ganttDays === 32) return day - Math.floor(ganttDays / 2);
-  if (Math.abs(day - TODAY) <= Math.floor(ganttDays / 2)) return mondayOf(TODAY);
-  return mondayOf(day);
-}
+const GANTT_SPAN = 365;
+const GANTT_SPAN_START = TODAY - Math.floor(GANTT_SPAN / 2);
 
-/** 首屏窗口：没有跨页请求时站在本档位最中性的起点。 */
-const defaultAnchor = (): number => anchorFor(TODAY);
-let ganttAnchor = defaultAnchor();
-
-/** 当前列宽。拖动平移要按它把位移换算成天数（按天吸附，见 mount）。 */
+/** 当前列宽（px）。滚动位置 ↔ 日期 的换算靠它。 */
 let currentColW = 0;
 
-/** 当前时间窗。点空白日期格新建时要按它把横坐标换算成那一天（见 mount 的事件委托）。 */
-let currentWin: TimelineWin | null = null;
+/** 下一次渲染完要滚到哪一天（换档保中心 / 跨页定位）。null = 沿用当前视口中心。 */
+let pendingScrollDay: number | null = null;
 
 /**
- * 甘特窗口：**当前档位的天数，不随数据变**。
+ * 当前视口中心停在哪一天 —— 滚动位置的**唯一事实来源**。
  *
- * 以前它有两种算法：档位 → 严格等于档位（今天 = 1 天，一根根线挤在一起），「全部」→
- * 撑到装下所有任务的跨度（几百天，于是列宽被压成十几像素）。两头都不好看，而且
- * 「点哪个档位都像没反应」。现在窗口只由 `ganttDays` + `ganttAnchor` 定 ——
- * 切档改宽度，「看别的时间段」交给拖动。
+ * 为什么不每次渲染直接从 `scrollLeft` 反算：每次 render 都会换掉整个 `.tt-scroll`，
+ * 新节点的 scrollLeft 是 0，而我们写下去的 scrollLeft 在布局未稳（页面隐藏、首帧
+ * 量不到宽度）时会被浏览器夹回一个小值。从被夹过的位置反算，读出来的是「时间轴的
+ * 左端」而不是「用户在看的那天」，下一次渲染又按它落位 —— 一路往过去漂。
+ * 所以：滚动事件里更新它（那时布局是真的），渲染时只认它。
  */
-function ganttWindow(): TimelineWin {
-  return { start: ganttAnchor, days: ganttDays };
-}
+let scrollDay = TODAY;
 
-/** 跨页请求进来之后，下一次 render 要把窗口对准这批任务（见 focusAnchor）。 */
+/** 跨页请求进来之后，下一次 render 要滚到这批任务所在的一段（见 focusDay）。 */
 let focusNextRender = false;
 
 /**
- * 窗口该落在哪儿：以这批任务**条形的跨度**（最早创建日 → 最晚截止日）的中心
- * 定位（周 / 14 天再用 anchorFor 对齐周一）；一条任务都没有 → 本档位默认位置。
+ * 时间轴窗口：**整条时间轴**，与档位无关。
  *
- * 2026-09-20 用户报的：从总览点「逾期 40」进来，窗口却停在上次拖动的位置上，目标全在
- * 屏幕外 —— 和「标签筛选留在原处」是同一类「把目标挡在视图外」。
- *
- * ⚠️ 它曾经还带一个「档位段」参数：窗口与档位那段没交集时退回「档位首日 - 2」。
- * 工具行那排档位（全部 / 昨天 / 今天 / 上周 / 本周 / 上月 / 本月）2026-09-21 撤掉之后
- * （见 `data/timeline.ts` 顶部那两段说明），这一支就没有来源了。
+ * 以前它等于档位天数（7/14/32），于是「窗口」和「一屏」是同一个东西，翻日期只能拖动。
+ * 现在档位只管列宽，窗口固定是整条 365 天的带子，看别处靠 `.tt-scroll` 横向滚动。
  */
-function focusAnchor(tasks: Task[]): number {
-  if (tasks.length === 0) return defaultAnchor();
+function ganttWindow(): TimelineWin {
+  return { start: GANTT_SPAN_START, days: GANTT_SPAN };
+}
+
+/** 视口里实际能放下几列（左侧任务列是吸附的，占掉 LABEL_W）。 */
+function visibleCols(scroll: HTMLElement, colW: number): number {
+  return Math.max(1, (scroll.clientWidth - LABEL_W) / colW);
+}
+
+/** 让某一天落在视口正中所需的 scrollLeft（夹在可滚范围内）。 */
+function scrollLeftForDay(scroll: HTMLElement, day: number, colW: number): number {
+  const x = LABEL_W + (day - GANTT_SPAN_START + 0.5) * colW; // 那列中线在内容里的横坐标
+  const left = x - LABEL_W - (scroll.clientWidth - LABEL_W) / 2;
+  const max = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
+  return Math.min(max, Math.max(0, Math.round(left)));
+}
+
+/** 视口正中是哪一天。`colW` 必须是**做出当前 scrollLeft 时**那一档的列宽。 */
+function centerDayOf(scroll: HTMLElement | null, colW: number): number | null {
+  if (!scroll || colW <= 0) return null;
+  const offset = (scroll.scrollLeft + (scroll.clientWidth - LABEL_W) / 2) / colW;
+  return GANTT_SPAN_START + Math.round(offset);
+}
+
+/**
+ * 跨页请求进来时该滚到哪一天：这批任务**条形的跨度中心**（最早创建日 → 最晚截止日）；
+ * 一条都没有 → 今天。
+ *
+ * 2026-09-20 用户报的：从总览点「逾期 40」进来，视图却停在上次翻到的位置，目标全在
+ * 屏幕外 —— 和「标签筛选留在原处」是同一类「把目标挡在视图外」。
+ */
+function focusDay(tasks: Task[]): number {
+  if (tasks.length === 0) return TODAY;
 
   let from = Number.POSITIVE_INFINITY;
   let to = Number.NEGATIVE_INFINITY;
@@ -160,8 +173,7 @@ function focusAnchor(tasks: Task[]): number {
     from = Math.min(from, dayNumber(task.created));
     to = Math.max(to, dayNumber(task.end));
   }
-  const mid = Math.floor((from + to) / 2);
-  return anchorFor(mid);
+  return Math.floor((from + to) / 2);
 }
 
 /** 首轮渲染（还没有 .tt-scroll 可量）时的宽度余量：边框 + 可能的滚动条。 */
@@ -190,10 +202,11 @@ const WEEKDAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"];
 // ─── 日期窗口与列宽 ──────────────────────────────────────────────────────────
 
 /**
- * 列宽 = 可用宽度扣掉任务列后按天数均分 —— 表格永远铺满右侧。
+ * 列宽 = 可用宽度扣掉任务列后按「一屏放几天」均分 —— 一屏正好铺满，不多不少。
  *
- * 原来还有个 120px 上限：宽屏上周档 7 天只占 840px，右边留一大片空白（用户截图
- * 反馈的就是这个）。现在只留下限 —— 窄屏装不下就横向滚动，宽屏一律撑满。
+ * 参数 `days` 现在是**档位天数**（7 / 14 / 32），不是时间轴长度：时间轴固定 365 天，
+ * 列宽只决定「一屏能看到几天」，剩下的靠横向滚动。原来那个 120px 上限早撤了 ——
+ * 宽屏上它会让周档只占 840px，右边空一大片。
  */
 function columnWidth(days: number, available: number): number {
   const room = Math.max(available - LABEL_W, COL_MIN * days);
@@ -1044,17 +1057,16 @@ export function mount(host: HTMLElement): void {
     (next) => {
       const days = Number(next) as GanttDays;
       if (days === ganttDays) return;
-      // 切档时保住当前窗口的**中心**（周 / 14 天再对齐到周一），不从用户拖到的
-      // 位置突然跳回今天；中心离今天不到一档时优先今天所在周（见 anchorFor）。
-      const center = ganttAnchor + Math.floor((ganttDays - 1) / 2);
+      // 换档只改「一屏放几天」，眼下看着的那一天不能动：记下视口中心，渲染完滚回去。
+      // （以前这里是按窗口左端重算 anchor，切档等于挪动时间轴）
+      pendingScrollDay = centerDayOf(table.querySelector<HTMLElement>(".tt-scroll"), currentColW) ?? scrollDay;
       ganttDays = days;
-      ganttAnchor = anchorFor(center);
       rangeSeg.setValue(next);
       render();
     },
   );
   rangeSeg.root.classList.add("tt-range-seg");
-  rangeSeg.root.title = "甘特图时间跨度：周 / 14 天 / 月";
+  rangeSeg.root.title = "甘特图缩放：一屏显示 周 / 14 天 / 月（左右滚动看别的日期）";
 
   // ── 标签筛选（替代原来的文本搜索框）──────────────────────────────────────
   // 搜索框只认「字」，而标签是一个个整体：用户点 #工作 就是「给我所有带这个标签的」，
@@ -1216,114 +1228,36 @@ export function mount(host: HTMLElement): void {
   // max-height: calc(100vh - 268px) 的写死估算
   const table = el("div", { class: "tt-box" });
 
-  // ── 横向拖动 = 平移窗口 ────────────────────────────────────────────────────
-  // 窗口宽度由档位定住之后，「看别的时间段」就只剩拖动这一条路（用户的口径：
-  // 「其他只需要拖动即可」）。月档按**天**吸附；周 / 14 天档按**整周**吸附，
-  // 否则拖一下就从「周一到周日」变成「周四到周三」，周一起始的约定当场破功。
+  // ── 横向滚动：滚动时更新表头那句区间 ──────────────────────────────────────
+  // 以前这里是「在表格上按住拖动 = 平移窗口」。2026-11-16 用户改口径（「日期可以滚动，
+  // 而不是固定的」）之后，时间轴是 365 天的连续带子，`.tt-scroll` 原生横向滚动就够了：
+  // 拖动那套（pointerdown/move/up + 拖完吞掉 click）整块撤掉 —— 它和原生滚动抢手势。
   //
-  // 监听挂在 .tt-box 上而**不是** .tt-scroll：后者每次 render 都被换掉（见 render
-  // 末尾的 table.replaceChildren），挂上去第一帧之后就收不到事件了。
-  let dragFromX = 0;
-  let dragFromAnchor = 0;
-  let dragging = false;
-  let dragged = false;
-
-  table.addEventListener("pointerdown", (event) => {
-    // 拖动平移是甘特专属：其他视图里表格没有日期列，拖了也看不见效果，
-    // 却会在背后把甘特窗口挪走（切回去发现位置变了，莫名其妙）
-    if (view !== "gantt" || event.button !== 0 || currentColW <= 0) return;
-    dragging = true;
-    dragged = false;
-    dragFromX = event.clientX;
-    dragFromAnchor = ganttAnchor;
-    // ⚠️ 这里**不能**捕获指针：捕获会把后续的 mouseup 重定向到 table，于是 click /
-    // dblclick 落到 table 上（它们取 mousedown 与 mouseup 的公共祖先）—— 行上的
-    // 「单击选中 / 双击开抽屉」就全没了。真开始拖的那一步再捕获（见 pointermove）
-  });
-
-  table.addEventListener("pointermove", (event) => {
-    if (!dragging) return;
-    const dx = event.clientX - dragFromX;
-    // 5px 以内当点击：不然「选中一行」会变成「窗口挪了一格」
-    if (!dragged && Math.abs(dx) < 5) return;
-    if (!dragged) {
-      dragged = true;
-      table.classList.add("dragging");
-      // 从这一刻起捕获：拖出表格边界（拖到任务列上、拖出窗口）也继续跟手
-      table.setPointerCapture(event.pointerId);
-    }
-    // 周 / 14 天按整周走（7 天一步，14 天窗口也始终落在周一）；月档仍按天走
-    const step = ganttDays === 32 ? 1 : 7;
-    const days = Math.round(dx / (currentColW * step)) * step;
-    const next = dragFromAnchor - days;
-    if (next !== ganttAnchor) {
-      ganttAnchor = next;
-      render();
-    }
-  });
-
-  const endDrag = (): void => {
-    if (!dragging) return;
-    dragging = false;
-    table.classList.remove("dragging");
-  };
-  table.addEventListener("pointerup", endDrag);
-  table.addEventListener("pointercancel", endDrag);
-
-  // 刚拖过就别让它顺手变成「点了某一行」或「双击开了抽屉」。捕获阶段拦：
-  // 行自己的 click / dblclick 还没轮到（这两个都得拦 —— 拖完松手那一下会同时产生
-  // click，双击里的第一下也可能正好落在拖动之后）
-  const swallowAfterDrag = (event: Event): void => {
-    if (!dragged) return;
-    event.stopPropagation();
-    event.preventDefault();
-  };
+  // 监听挂在 .tt-box 上而**不是** .tt-scroll：后者每次 render 都被换掉（见 render 末尾的
+  // table.replaceChildren），挂上去活不过第一帧。scroll 不冒泡，但**捕获阶段**能收到。
+  let rangeRaf = 0;
   table.addEventListener(
-    "click",
-    (event) => {
-      if (!dragged) return;
-      dragged = false; // 这一次算「拖完的余波」，下一次点击才是正常的点击
-      swallowAfterDrag(event);
+    "scroll",
+    () => {
+      // 用户滚动（以及我们写下去的 scrollLeft 生效后）都会走到这里：这时布局是真的，
+      // 才是更新「当前中心日」的可靠时机
+      const scroll = table.querySelector<HTMLElement>(".tt-scroll");
+      if (scroll) scrollDay = centerDayOf(scroll, currentColW) ?? scrollDay;
+
+      if (rangeRaf) return;
+      rangeRaf = requestAnimationFrame(() => {
+        rangeRaf = 0;
+        syncRange();
+      });
     },
     true,
   );
-  table.addEventListener("dblclick", swallowAfterDrag, true);
 
-  // ── 点日期列的空白处 = 在那天新建 ──────────────────────────────────────────
-  // 表头格自己已经接了 click；这里补上行内 .tt-track 的空白和最后一行下面的大片
-  // 空白 —— 用户说的「未来的格子」多半点在那一块，只做表头会以为没反应。
-  //
-  // 单击/双击要分开：行内双击仍是「打开维护抽屉」。所以单击先缓一拍，第二次
-  // 点击到来（dblclick）就撤销这次新建；拖动余波已被上面的捕获监听拦掉。
-  let pendingCellCreate: number | undefined;
-  const cancelCellCreate = (): void => {
-    if (pendingCellCreate !== undefined) window.clearTimeout(pendingCellCreate);
-    pendingCellCreate = undefined;
-  };
-  table.addEventListener("dblclick", cancelCellCreate, true);
-  table.addEventListener("click", (event) => {
-    if (view !== "gantt" || !currentWin || event.button !== 0) return;
-    const target = event.target as HTMLElement;
-    // 表头格 / 条 / 分页器各有自己的去处，别重复开表单
-    if (target.closest(".tt-date, .tt-bar, .pager")) return;
-    const track = target.closest<HTMLElement>(".tt-track");
-    const scroll = target.closest<HTMLElement>(".tt-scroll");
-    if (!track && !scroll) return;
-    const grid = table.querySelector<HTMLElement>(".tt-grid");
-    if (!grid || currentColW <= 0) return;
-    // 行内按 track 的左缘算；下方空白按 grid 左缘 + 任务列宽算
-    const originX = track
-      ? track.getBoundingClientRect().left
-      : grid.getBoundingClientRect().left + LABEL_W;
-    const offset = Math.floor((event.clientX - originX) / currentColW);
-    if (offset < 0 || offset >= currentWin.days) return;
-    const day = currentWin.start + offset;
-    cancelCellCreate();
-    pendingCellCreate = window.setTimeout(() => {
-      pendingCellCreate = undefined;
-      openCreateTask({ day });
-    }, 240);
-  });
+  // ── 新建任务只认**表头那一格** ────────────────────────────────────────────
+  // 2026-11-16 用户定的（原话「空白也会新建任务，不要」）：表体里的空白格 / 最后一行
+  // 下面的空白区不再开表单 —— 那里是「看」的地方（行要单击选中、双击开抽屉，空白区
+  // 要能拖着滚动），顺手弹出新建框反而挡路。排到某一天走表头：表头那格有悬停「＋」
+  // 提示，点一下就把截止日预填那天（含未来）。
 
   // 工具行和表格包在同一个容器里：直接挂两个子节点给 .page-body，
   // 它的 gap 会和 .tools 自己的 margin-bottom 叠加成 28px。
@@ -1343,20 +1277,49 @@ export function mount(host: HTMLElement): void {
     ]),
   );
 
+  /**
+   * 表头那句区间：显示**视口里**的首末日（不是整条时间轴），今天滚出视野时变成
+   * 「↺ 回到今天」的强调色入口 —— 没有这个出口，昨天那批任务可能在屏幕外好几个月。
+   *
+   * 只建一次：它挂在每次重建的表头上，节点被搬来搬去但监听一直在。若每帧新造一个，
+   * 滚动时这句文案和 hover 状态都会跟着闪。
+   */
+  const rangeText = el("span", { class: "mono tt-range dim" });
+  rangeText.addEventListener("click", () => {
+    const scroll = table.querySelector<HTMLElement>(".tt-scroll");
+    if (!scroll) return;
+    // 平滑滚回今天：不重排整张表 —— 滚动过程中那句区间由 syncRange 一段段更新
+    scroll.scrollTo({ left: scrollLeftForDay(scroll, TODAY, currentColW), behavior: "smooth" });
+  });
+
+  /** 按**当前滚动位置**刷新表头那句区间与「回到今天」的状态。 */
+  const syncRange = (): void => {
+    const scroll = table.querySelector<HTMLElement>(".tt-scroll");
+    if (!scroll || currentColW <= 0 || view !== "gantt") return;
+    const first = GANTT_SPAN_START + Math.floor(scroll.scrollLeft / currentColW);
+    const last = first + Math.max(0, Math.round(visibleCols(scroll, currentColW)) - 1);
+    const todayVisible = TODAY >= first && TODAY <= last;
+    rangeText.textContent = todayVisible
+      ? `${monthDayText(first)} – ${monthDayText(last)}`
+      : "↺ 回到今天";
+    rangeText.classList.toggle("dim", todayVisible);
+    rangeText.classList.toggle("off", !todayVisible);
+  };
+
   const render = (): void => {
     // 别处可能清了标签筛选（新建 / 导入 / 跨页跳转），按钮文案要跟着变
     syncTagFilter();
     // 时间跨度只对甘特有意义的控件，别在日历/列表/看板上碍眼
     rangeSeg.root.hidden = view !== "gantt";
 
-    // 顺序：先筛，再让窗口去迁就筛出来的这批（见 focusAnchor）。
+    // 顺序：先筛，再决定滚到哪一段（见 focusDay）。
     // 反过来「先定窗口、再拿窗口砍任务」的结果就是总览写 4、这里只画 3。
     const matched = visibleTasks();
 
-    // 跨页请求进来的那一帧：把窗口对准这批任务（之后一律尊重用户的拖动）
+    // 跨页请求进来的那一帧：滚到这批任务所在的那一段（之后一律尊重用户的滚动）
     if (focusNextRender) {
       focusNextRender = false;
-      ganttAnchor = focusAnchor(matched);
+      pendingScrollDay = focusDay(matched);
     }
 
     const pageCount = Math.max(1, Math.ceil(matched.length / taskPageSize));
@@ -1370,11 +1333,9 @@ export function mount(host: HTMLElement): void {
 
     const rows = matched.slice(page * taskPageSize, (page + 1) * taskPageSize);
 
-    // 窗口：当前档位（周 / 14 天 / 月），不随数据撑开 —— 看别的时间段靠**拖动**。
-    // 列宽自适应铺满，所以不再需要「按任务跨度撑窗口」那套（fitWindow 已撤）
+    // 时间轴：整条 365 天的带子（见 ganttWindow）。档位只决定列宽 —— 一屏放几天，
+    // 所以这里除的是 `ganttDays` 而不是 `win.days`；内容宽度远大于视口，横向可滚。
     const win = ganttWindow();
-    currentWin = win;
-    const winEnd = win.start + win.days - 1;
 
     // 直接用 .tt-scroll 的 clientWidth：它已经扣掉了容器边框和真实的竖向滚动条，
     // 不用再猜 16px。首轮还没有这个节点，用 .tt-box 宽度减兜底余量，下一帧重排。
@@ -1384,7 +1345,11 @@ export function mount(host: HTMLElement): void {
     const available = prevScroll
       ? prevScroll.clientWidth
       : (table.clientWidth > 0 ? table.clientWidth : 1080) - SCROLL_GUTTER;
-    const colW = columnWidth(win.days, available);
+    // 换列宽之前先定下「要停在哪一天」：换档/跨页给了明确目标就用它，否则沿用当前
+    // 中心日（`scrollDay`，见上面那段说明 —— 不从 scrollLeft 反算，避免被夹回的值带偏）
+    const keepDay = pendingScrollDay ?? scrollDay;
+    pendingScrollDay = null;
+    const colW = columnWidth(ganttDays, available);
     currentColW = colW;
 
     // ── chips（数量随数据变）──
@@ -1508,7 +1473,7 @@ export function mount(host: HTMLElement): void {
       );
       // 表头那一格就是「在这一天新建」的入口，和日历点格子同一套语义（截止/开始
       // 都预填那天）。未来的日期不用先建一条今天的再改截止日，点一下就落在那天。
-      // 拖动平移的余波会被 mount 里 table 上的捕获阶段拦掉，不会误开表单。
+      // 表体空白**不是**入口（2026-11-16 用户定的：「空白也会新建任务，不要」）。
       cell.addEventListener("click", () => openCreateTask({ day }));
       dayCells.push(cell);
     }
@@ -1526,34 +1491,21 @@ export function mount(host: HTMLElement): void {
     const satOffset = (6 - new Date(win.start * DAY_MS).getUTCDay() + 7) % 7;
     grid.style.setProperty("--tt-wk", `${satOffset * colW}px`);
 
-    // 表头那句区间：既是「我现在看的是哪一段」，也是**回到今天**的入口 ——
-    // 拖远了之后没有出口就会迷路（档位固定之后，昨天那批数据可能在屏幕外好几个星期）。
-    // 今天不在窗口里时它变成可点的强调色
-    const todayVisible = TODAY >= win.start && TODAY <= winEnd;
-    const rangeText = el("span", {
-      class: `mono tt-range ${todayVisible ? "dim" : "off"}`,
-      text: todayVisible
-        ? `${monthDayText(win.start)} – ${monthDayText(winEnd)}`
-        : `↺ 回到今天（${monthDayText(win.start)} – ${monthDayText(winEnd)}）`,
-      title: `${GANTT_RANGES.find((range) => range.value === String(ganttDays))?.label ?? "月"}视图（${ganttDays} 天） · 在表格上按住拖动可左右平移 · 点这里回到今天`,
-    });
-    rangeText.addEventListener("click", () => {
-      ganttAnchor = defaultAnchor();
-      render();
-    });
+    // 表头那句区间（`rangeText`）是常驻节点：这里只定它的 tooltip，文案与「↺ 回到今天」
+    // 的切换由 syncRange 按**当前滚动位置**写 —— 滚到 3 月去，那句要跟着变
+    rangeText.title = `${GANTT_RANGES.find((range) => range.value === String(ganttDays))?.label ?? "月"}视图（一屏 ${ganttDays} 天） · 左右滚动看别的日期 · 点这里回到今天`;
 
     // 最后一行到表格底还有一段空白：行内那条铺不到那儿，这里补一块同色带子。
     // 放在最前面 —— 它就画在行的**下面**（行的 `.tt-track` 不透明，会盖住它），
     // 只在空白区露出来，两块接起来才像「一列」。
-    const voidBand = todayVisible ? el("div", { class: "tt-colband" }) : null;
-    if (voidBand) {
-      voidBand.style.top = "36px"; // 表头高度，接在表头那格下面
-      voidBand.style.left = `${LABEL_W + (TODAY - win.start) * colW}px`;
-      voidBand.style.width = `${colW}px`;
-    }
+    // 时间轴是整条 365 天的带子，今天永远在带子里，所以这块不再有「今天不在窗口」的分支
+    const voidBand = el("div", { class: "tt-colband" });
+    voidBand.style.top = "36px"; // 表头高度，接在表头那格下面
+    voidBand.style.left = `${LABEL_W + (TODAY - win.start) * colW}px`;
+    voidBand.style.width = `${colW}px`;
 
     grid.append(
-      ...(voidBand ? [voidBand] : []),
+      voidBand,
       el("div", { class: "tt-hrow" }, [
         el("div", { class: "tt-label" }, [
           el("span", { class: "dim mono", text: "任务" }),
@@ -1576,14 +1528,13 @@ export function mount(host: HTMLElement): void {
     );
 
     // 「今天」的标记方式（2026-11-16 用户定的）：不要那根贯穿表体的细竖线，改成
-    // **高亮一列** —— 表头那格描边 + 表体整列淡底，上下连起来是一条完整的列。
+    // **高亮一列** —— 表头那格实色 + 表体整列淡底，上下连起来是一条完整的列。
     // 两块带子分别铺在：每行的 `.tt-track` 里（压格线、压不住条）与最后一行下面的
-    // 空白区（见上面 voidBand）。今天被拖出窗口时两块都不生成，出口仍是表头的
-    // 「↺ 回到今天」。
+    // 空白区（见上面 voidBand）。滚到今天看不见的地方，出口是表头那句「↺ 回到今天」。
 
     table.replaceChildren(
       el("div", { class: "tt-wrap" }, [el("div", { class: "tt-scroll" }, [grid])]),
-      // 窗口由档位定住，所以翻页时表头的区间不变 —— 换页只是换行，不换时间
+      // 分页只换行，不换时间：滚动位置是用户自己定的，翻页不该把它挪走
       pager({
         page,
         pageCount,
@@ -1600,14 +1551,24 @@ export function mount(host: HTMLElement): void {
         },
       }),
     );
+
+    // 滚动位置：渲染会换掉整个 .tt-scroll，位置得重新摆一次 ——
+    // 换档后落在同一「中心日」，首次进来落在今天，翻页/筛选后留在原地。
+    // 面板此时还量不到宽度（页面隐藏 / 首帧）就跳过：窗口显示出来会再 render 一次，
+    // 那时 scrollDay 还是原来那天，落位才准（写个 0 进去会被夹成「时间轴左端」）。
+    const nextScroll = table.querySelector<HTMLElement>(".tt-scroll");
+    if (nextScroll && nextScroll.clientWidth > 0) {
+      nextScroll.scrollLeft = scrollLeftForDay(nextScroll, keepDay, colW);
+      scrollDay = keepDay;
+    }
+    syncRange();
   };
 
-  // 首页**不**动窗口：默认就是「今天前 16 天」（`defaultAnchor`）—— 那是最中性的起点。
-  // 曾经这里也要对准一次（那时默认档位是「本周」，不对准两者就各说各话）；档位撤了
-  // 之后没有「对谁」这回事了。跨页请求进来时仍会对准（见 consumeTasksRequest）。
+  // 首页**不**特别定位：首帧没有可参照的滚动位置，`keepDay` 落回今天 —— 打开就在今天
+  // 这一屏。跨页请求进来时会滚到那批任务所在的一段（见 consumeTasksRequest）。
   render();
   // 首轮渲染时还没有 .tt-scroll，可用宽度用的是兜底值。下一帧量到真实的
-  // clientWidth（已扣边框和滚动条）再排一次，右侧才严丝合缝。
+  // clientWidth（已扣边框和滚动条）再排一次，列宽才准（滚动位置由 keepDay 保持）。
   requestAnimationFrame(render);
   onDataChange(render);
 
@@ -1668,8 +1629,8 @@ export function mount(host: HTMLElement): void {
     // 控件是常驻的，别处的跳转改了筛选值，这里得把显示跟上
     urgencyPick.setValue(urgencyFilter === "all" ? "all" : (String(urgencyFilter) as UrgencyKey));
 
-    // 窗口也重新对准这批（点「逾期 40」进来，窗口却停在上次拖动的位置上，目标全在
-    // 屏幕外 —— 和「标签筛选留在原处」是同一类「把目标挡在视图外」，理由一样）
+    // 也滚回这批任务所在的一段（点「逾期 40」进来，时间轴却停在上次翻到的位置上，
+    // 目标全在屏幕外 —— 和「标签筛选留在原处」是同一类「把目标挡在视图外」）
     focusNextRender = true;
     render();
     if (request.taskId !== null) scrollToSelected();

@@ -627,19 +627,13 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  /* 拖动平移（2026-09-20）：窗口宽度由档位定住之后，「看别的时间段」就只有拖动这一条路。
-     grab 是唯一的线索 —— 表头那句区间悬浮时也会说，但光标不用等悬停 */
-  cursor: grab;
-}
-
-/* 拖的时候：光标变抓手，并且**别选中文字**（一拖整屏都是蓝色高亮） */
-.tt-box.dragging .tt-scroll {
-  cursor: grabbing;
-  user-select: none;
+  /* 2026-11-16：横向从「按住拖动平移」改成**原生滚动**之后，光标回到默认箭头 ——
+     grab 会让人以为还能拖（拖了只是选中文字，更像坏了） */
+  cursor: default;
 }
 
 /* 表头那句区间：既是「我在看哪一段」，也是**回到今天**的入口。
-   今天被拖出窗口时它转成强调色 —— 那时它是唯一的出口 */
+   今天滚出视野时它转成强调色 —— 那时它是唯一的出口 */
 .tt-range {
   cursor: pointer;
 }
@@ -720,24 +714,31 @@
   background: var(--bg-2);
 }
 
-/* 今天（2026-11-16 改为整格高亮）：原来只是淡底 + 底线，再配一根贯穿表体的竖线。
-   竖线撤掉后，这一格是标记「今天在哪一列」的唯一线索，做足：实心描边 + 淡底 +
-   加粗数字 + 「今天」小签，让眼睛扫一眼就落在这一列。周几那行在 JS 里换成了「今天」。 */
+/* 今天（2026-11-16 晚换的方案）：表头这格做成**实色强调块** —— 白字 + 加深色，
+   比原来的「淡紫底 + 描边」亮得多（原来那版压在暖纸色背景上发灰，用户说「灰暗」）。
+   表体那一列同步换成更蓝的 `--today-tint`，上下是一条整色的列。 */
 .tt-date.today {
-  color: var(--accent);
-  font-weight: 600;
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1.5px var(--accent);
+  color: #fff;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1.5px var(--accent-h);
   z-index: 7;
 }
 
-/* 「今天」小签：替代原来挂在竖线顶端的那枚。压在周几那行位置，
-   维持表头两行的节奏，不必额外占高。 */
+/* 实色底上那枚「＋」也改用白色，否则强调色的加号糊在强调色底上 */
+.tt-date.today::after {
+  color: #fff;
+}
+
+.tt-date.today .dn {
+  font-weight: 700;
+}
+
+/* 「今天」小签：底已经是实色，签改成半透明白 —— 两层实色叠在一起会互相吃掉 */
 .tt-date.today .dw.today-tag {
   display: inline-block;
   font: 600 9px var(--font);
   color: #fff;
-  background: var(--accent);
+  background: rgba(255, 255, 255, 0.24);
   border-radius: 4px;
   padding: 1px 5px;
   opacity: 1;
@@ -902,9 +903,9 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  /* 与表头那格**同一个颜色**：整列从表头到底是一块料。
-     试过降到 75% 透明度，浅色下与周末那条灰带（--bg-2）明度太接近，反而分不出哪条是「今天」 */
-  background: var(--accent-soft);
+  /* 2026-11-16 晚：换成更蓝更亮的 `--today-tint`。原来用 accent-soft（#e8e9f7），
+     压在暖纸色面板上偏灰，用户的原话是「当日应该更鲜亮，而不是灰暗的」 */
+  background: var(--today-tint);
   pointer-events: none;
 }
 

@@ -899,43 +899,65 @@ try {
   );
   await pickSort("按优先级"); // 切回默认，后面的用例按默认排序走
 
-  // ── 甘特：周 / 14 天 / 月三档 · 拖动平移（2026-11-16 加的三档）────────────
-  // 以前窗口写死 32 天，看一周得拖半天；现在工具行上直接切档，切档只改「这一屏多宽」，
-  // 不改筛选。看别的时间段仍然靠拖动。
+  // ── 甘特：连续时间轴（横向可滚）· 周 / 14 天 / 月只改缩放（2026-11-16）──────
+  // 用户的原话：「我希望日期可以滚动，而不是固定的」。时间轴固定铺 365 天，三档只决定
+  // 一屏放几天（列宽），翻日期靠 `.tt-scroll` 原生横向滚动 —— 早先那套「按住拖动平移」
+  // 与「点空白格新建」都已撤掉。
   const ganttToday = Math.floor(
     Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()) / 86400000,
   );
   const ganttShape = () =>
     page.evaluate(() => {
-      const dates = [...document.querySelectorAll("#page-tasks .tt-date")];
+      const scroll = document.querySelector("#page-tasks .tt-scroll");
       const grid = document.querySelector("#page-tasks .tt-grid");
+      const dates = [...document.querySelectorAll("#page-tasks .tt-date")];
       const rangeText = document.querySelector("#page-tasks .tt-range");
+      const todayCell = document.querySelector("#page-tasks .tt-date.today");
+      const colW = grid ? Number.parseFloat(getComputedStyle(grid).getPropertyValue("--tt-col")) : 0;
+      // 视口里第一列是哪一天：滚动位置 ÷ 列宽（左侧任务列是吸附的，占 256px）
+      const firstIdx = colW > 0 ? Math.floor(scroll.scrollLeft / colW) : 0;
+      const cols = colW > 0 ? Math.round((scroll.clientWidth - 256) / colW) : 0;
+      const sBox = scroll ? scroll.getBoundingClientRect() : null;
+      const tBox = todayCell ? todayCell.getBoundingClientRect() : null;
+      const todayStyle = todayCell ? getComputedStyle(todayCell) : null;
       return {
         days: dates.length,
         first: Number(dates[0]?.getAttribute("data-day") ?? NaN),
         last: Number(dates[dates.length - 1]?.getAttribute("data-day") ?? NaN),
+        colW: Math.round(colW),
+        cols,
+        scrollLeft: scroll ? Math.round(scroll.scrollLeft) : 0,
+        scrollW: scroll ? Math.round(scroll.scrollWidth) : 0,
+        clientW: scroll ? scroll.clientWidth : 0,
+        visibleFirst: Number(dates[firstIdx]?.getAttribute("data-day") ?? NaN),
+        visibleLast: Number(
+          dates[Math.min(dates.length - 1, firstIdx + cols - 1)]?.getAttribute("data-day") ?? NaN,
+        ),
+        // 视口中心是哪一天：换档时它不该跳（换的是列宽，不是看到的日子）
+        centerDay: scroll
+          ? Math.round(
+              Number(dates[0]?.getAttribute("data-day") ?? 0) +
+                (scroll.scrollLeft + (scroll.clientWidth - 256) / 2) / colW,
+            )
+          : NaN,
         todayAt: dates.findIndex((node) => node.classList.contains("today")),
-        weekday: new Date(Number(dates[0]?.getAttribute("data-day") ?? 0) * 86400000).getUTCDay(),
-        colW: grid ? Number.parseFloat(getComputedStyle(grid).getPropertyValue("--tt-col")) : 0,
-        // 铺满：网格宽度要贴住可滚动区（右边不再留一条空白）
-        gridW: grid ? Math.round(grid.getBoundingClientRect().width) : 0,
-        scrollW: document.querySelector("#page-tasks .tt-scroll")?.clientWidth ?? 0,
+        todayTag: todayCell ? 1 : 0,
+        // 时间轴上「今天」那格一直都在 DOM 里 —— 要看它是否真的落在视口内
+        todayInView: Boolean(sBox && tBox && tBox.left < sBox.right && tBox.right > sBox.left + 256),
+        // 表头今天格是**实色强调块**（白字）：用户嫌上一版淡紫底「灰暗」，换成实色
+        todaySolid: Boolean(todayStyle && todayStyle.color === "rgb(255, 255, 255)"),
+        todayBg: todayStyle?.backgroundColor ?? "",
         // 标准甘特（2026-09-21）：条上**不画进度、也不按档位切段** —— 这两类段一个都不该有
         segSplit: document.querySelectorAll(
           "#page-tasks .tt-bar .seg-h, #page-tasks .tt-bar .seg-d",
         ).length,
-        // 「今天」只靠表头那格标记：竖线（.tt-today）已撤，改为整格高亮 + 「今天」小签。
-        // todayTag 数就是「今天格」数：今天在窗口里=1，被拖出窗口=0
-        todayTag: document.querySelectorAll("#page-tasks .tt-date.today .dw.today-tag").length,
         noTodayLine: document.querySelectorAll("#page-tasks .tt-today").length === 0,
-        // 今天整列高亮（2026-11-16 用户提的「高亮一列」）：每行 `.tt-track` 里一条同色带子，
-        // 最后一行下面的空白区再补一条。判据取「与表头那格左右对齐、宽度一致」，
-        // 不硬编码像素 —— 三档的列宽都不一样
+        // 今天整列高亮：每行 `.tt-track` 里一条同色带子 + 最后一行下面的空白区一条。
+        // 判据取「与表头那格左右对齐、宽度一致」，不硬编码像素 —— 三档列宽都不同
         band: (() => {
           const cell = document.querySelector("#page-tasks .tt-date.today");
           const bands = [...document.querySelectorAll("#page-tasks .tt-track .tt-colband")];
           const voidBand = document.querySelector("#page-tasks .tt-grid > .tt-colband");
-          const grid = document.querySelector("#page-tasks .tt-grid");
           const rect = (node) => (node ? node.getBoundingClientRect() : null);
           const c = rect(cell);
           const first = rect(bands[0]);
@@ -958,27 +980,46 @@ try {
   const rangeBtn = (label) => `#page-tasks .tt-range-seg button:has-text('${label}')`;
   const rangeOn = async () =>
     ((await page.locator("#page-tasks .tt-range-seg button.on").textContent()) ?? "").trim();
-  // 从总览点进来时窗口可能对准了逾期那批（今天不在屏内）——先点表头回到今天，
-  // 再从三档里点回默认「月」。这样下面三档断言站在一个确定的起点上。
+  /** 把横向滚动条挪 n 格（用真几何，不猜像素）。 */
+  const scrollByCells = async (cells) => {
+    await page.evaluate((count) => {
+      const scroll = document.querySelector("#page-tasks .tt-scroll");
+      const grid = document.querySelector("#page-tasks .tt-grid");
+      const colW = Number.parseFloat(getComputedStyle(grid).getPropertyValue("--tt-col"));
+      scroll.scrollLeft += colW * count;
+    }, cells);
+    await sleep(320);
+  };
+
+  // 起点：先「回到今天」再点回月档，下面每条断言都站在「今天在屏内」上
   await page.click("#page-tasks .tt-range");
-  await sleep(200);
+  await sleep(600);
   await page.click(rangeBtn("月"));
-  await sleep(250);
+  await sleep(350);
   const monthShape = await ganttShape();
   check(
-    "甘特默认月档 32 天（今天这一格高亮，无贯穿竖线）",
-    monthShape.days === 32 &&
-      monthShape.last === monthShape.first + 31 &&
+    "时间轴是一条可横向滚动的长带子（整条 365 天、一屏 32 天）",
+    monthShape.days === 365 &&
+      monthShape.last === monthShape.first + 364 &&
+      monthShape.cols === 32 &&
+      // 内容远比视口宽 —— 这才有「可滚动」可言（以前窗口正好等于一屏，一像素都滚不动）
+      monthShape.scrollW > monthShape.clientW * 2 &&
       monthShape.segSplit === 0 &&
-      monthShape.todayAt >= 0 &&
-      monthShape.todayTag === 1 &&
+      monthShape.todayInView &&
+      !monthShape.rangeOff &&
       monthShape.noTodayLine &&
       (await rangeOn()) === "月",
-    `${monthShape.days} 天 · ${monthShape.first}–${monthShape.last} · 今天第 ${monthShape.todayAt} 格 · 高亮签 ${monthShape.todayTag} · 竖线 ${monthShape.noTodayLine ? "无" : "有"}`,
+    `${monthShape.days} 天（${monthShape.first}–${monthShape.last}）· 一屏 ${monthShape.cols} 列 · 内容 ${monthShape.scrollW}px / 视口 ${monthShape.clientW}px · 列宽 ${monthShape.colW}px`,
+  );
+
+  check(
+    "表头「今天」是实色强调块（白字），不是上一版那层淡紫",
+    monthShape.todaySolid && monthShape.todayTag === 1,
+    `文字色白=${monthShape.todaySolid} · 底色 ${monthShape.todayBg}`,
   );
 
   // 整列：每行一条带子（少一条就是「中间某几行没高亮」）+ 空白区一条铺到表底。
-  // 对齐判据用距离而不是写死像素：三档列宽不同，32 天档一列才 33px，差 1px 就看得出来
+  // 对齐判据用距离而不是写死像素：三档列宽差三倍，32 天档一列才 33px，差 1px 就看得出来
   check(
     "今天整列高亮：每行都有带子，与表头那格对齐，空白区铺到表底",
     monthShape.band.rows === monthShape.band.rowCount &&
@@ -991,65 +1032,50 @@ try {
     `${monthShape.band.rows}/${monthShape.band.rowCount} 行 · 左差 ${monthShape.band.align}px · 宽差 ${monthShape.band.widthMatch}px · 空白带 ${monthShape.band.hasVoid} · 底 ${monthShape.band.voidBottom}/${monthShape.band.gridBottom}`,
   );
 
-  // 三档切换：只换窗口宽度，首尾接得上、中心不跳、今天仍在屏内、高亮跟着走
+  // 周档：一屏 7 天，列宽放大 —— 档位从「换一段窗口」变成「放大/缩小时间轴」
   await page.click(rangeBtn("周"));
-  await sleep(250);
+  await sleep(350);
   const weekShape = await ganttShape();
   check(
-    "切到周档：7 天、周一起始、铺满右侧、今天在屏内",
-    weekShape.days === 7 &&
-      weekShape.last === weekShape.first + 6 &&
-      weekShape.weekday === 1 &&
-      weekShape.todayAt >= 0 &&
-      weekShape.todayTag === 1 &&
-      // 原来列宽封顶 120px，宽屏上周档右边空一大片；现在网格贴住容器
-      weekShape.scrollW - weekShape.gridW <= 2 &&
+    "切到周档：一屏 7 天，列宽约为月档的 4 倍，今天仍在屏内",
+    weekShape.days === 365 &&
+      weekShape.cols === 7 &&
+      weekShape.colW >= monthShape.colW * 3.5 &&
+      weekShape.todayInView &&
       (await rangeOn()) === "周",
-    `${weekShape.days} 天 · 首日周${weekShape.weekday} · 今天第 ${weekShape.todayAt} 格 · 网格 ${weekShape.gridW}/${weekShape.scrollW}px · 列宽 ${weekShape.colW}px`,
+    `一屏 ${weekShape.cols} 列 · 列宽 ${monthShape.colW} → ${weekShape.colW}px`,
   );
 
   await page.click(rangeBtn("14 天"));
-  await sleep(250);
+  await sleep(350);
   const halfShape = await ganttShape();
   check(
-    "切到 14 天档：14 天、周一起始、铺满、高亮在「14 天」",
-    halfShape.days === 14 &&
-      halfShape.last === halfShape.first + 13 &&
-      halfShape.weekday === 1 &&
-      halfShape.todayAt >= 0 &&
-      halfShape.todayTag === 1 &&
-      halfShape.scrollW - halfShape.gridW <= 2 &&
+    "切到 14 天档：一屏 14 天，今天仍在屏内",
+    halfShape.days === 365 &&
+      halfShape.cols === 14 &&
+      halfShape.todayInView &&
       (await rangeOn()) === "14 天",
-    `${halfShape.days} 天 · 首日周${halfShape.weekday} · 今天第 ${halfShape.todayAt} 格 · 网格 ${halfShape.gridW}/${halfShape.scrollW}px`,
+    `一屏 ${halfShape.cols} 列 · 列宽 ${halfShape.colW}px`,
   );
 
   await page.click(rangeBtn("月"));
-  await sleep(250);
-  const ganttStart = await ganttShape();
+  await sleep(350);
+  const monthAgain = await ganttShape();
   check(
-    "切回月档：32 天且高亮回到「月」",
-    ganttStart.days === 32 && (await rangeOn()) === "月",
-    `${ganttStart.days} 天 · 高亮 ${await rangeOn()}`,
+    "换档保中心：来回切档之后，视口中心那天没跳",
+    (await rangeOn()) === "月" && Math.abs(monthAgain.centerDay - halfShape.centerDay) <= 1,
+    `${halfShape.centerDay}（14 天档）→ ${monthAgain.centerDay}（月档）`,
   );
 
-  // 拖动平移：按**天**吸附（拖两格 = 往过去挪两天）。档位定住之后，「看别的时间段」
-  // 就只剩拖动这一条路 —— 拖不动的话这一档就是死的
-  const dragOn = async (days) => {
-    const box = await page.locator("#page-tasks .tt-scroll").boundingBox();
-    const y = box.y + Math.min(60, box.height / 2);
-    const x = box.x + 40;
-    await page.mouse.move(x, y);
-    await page.mouse.down();
-    await page.mouse.move(x + ganttStart.colW * days, y, { steps: 8 });
-    await page.mouse.up();
-    await sleep(320);
-  };
-  await dragOn(2);
-  const afterDrag = await ganttShape();
+  // 「日期可以滚动」的本体：滚三格，可视首日就得往后三天
+  await scrollByCells(3);
+  const scrolled = await ganttShape();
   check(
-    "在表格上拖动可以平移窗口（拖两格 = 往过去挪两天，按天吸附）",
-    afterDrag.first === ganttStart.first - 2 && afterDrag.days === 32,
-    `${ganttStart.first} → ${afterDrag.first} · 列宽 ${ganttStart.colW}px`,
+    "横向滚动真的在滚日期（滚三格 = 可视首日往后三天）",
+    scrolled.visibleFirst === monthAgain.visibleFirst + 3 &&
+      scrolled.scrollLeft > monthAgain.scrollLeft &&
+      scrolled.days === 365,
+    `${monthAgain.visibleFirst} → ${scrolled.visibleFirst} · scrollLeft ${monthAgain.scrollLeft} → ${scrolled.scrollLeft}`,
   );
 
   // 标准甘特（2026-09-21 用户定的）：条上**不画进度、也不按档位切段** —— 它只回答
@@ -1122,51 +1148,38 @@ try {
     JSON.stringify(overdueBar),
   );
 
-  // 拖远了必须**有出口**：今天不在窗口里时，表头那句区间变成强调色的「↺ 回到今天」，
-  // 点它回到默认窗口 —— 没有出口的话，昨天那批数据可能在屏幕外好几星期
-  // 三档来回切之后月档起点已经是 20763（比默认晚 6 天），拖 18 格今天还落在
-  // 窗口末端，测不出「回到今天」——直接拖到今天彻底出屏
-  await dragOn(26);
+  // 滚远了必须**有出口**：今天滚出视野时，表头那句区间变成强调色的「↺ 回到今天」，
+  // 点它滑回今天 —— 一年长的时间轴，没有出口就会迷路
+  await scrollByCells(40);
   const away = await ganttShape();
   await page.locator("#page-tasks .tt-range").click();
-  await sleep(320);
+  await sleep(1200); // 平滑滚动，给足时间
   const home = await ganttShape();
   check(
-    "拖远之后能一键回到今天（表头那句区间就是入口）",
+    "滚远之后能一键回到今天（表头那句区间就是入口）",
     away.rangeOff &&
-      // 今天被拖出窗口 → 表头没有今天格（没有高亮签），比竖线更直观
-      away.todayTag === 0 &&
-      // 整列带子也得一起消失：留一条画在屏幕外/夹在边上的色块只会误导
-      away.band.rows === 0 &&
-      !away.band.hasVoid &&
+      !away.todayInView &&
+      // 今天那格还在 DOM 里（时间轴固定一年），只是跑出了视口
+      away.todayTag === 1 &&
       !home.rangeOff &&
-      home.todayTag === 1 &&
-      home.band.rows === home.band.rowCount &&
-      home.first === ganttToday - 16,
-    `拖远到 ${away.first}（off=${away.rangeOff}，今天签 ${away.todayTag}，带子 ${away.band.rows}）→ 回到 ${home.first}（今天签 ${home.todayTag}，带子 ${home.band.rows}）`,
+      home.todayInView &&
+      Math.abs(home.centerDay - ganttToday) <= 1,
+    `滚远到 ${away.visibleFirst}（off=${away.rangeOff}，今天在屏内=${away.todayInView}）→ 回到中心 ${home.centerDay}（今天 ${ganttToday}）`,
   );
 
-  // 周档拖动按**整周**：拖一天就会把「周一到周日」变成「周四到周三」，
-  // 于是用户截图里那个毛病又回来了。拖 7 格 = 上一周，首日必须还是周一
+  // 周档滚动：列宽大，滚一列就是一整天 —— 和月档「滚一格走一天」是同一套换算
   await page.click(rangeBtn("周"));
-  await sleep(250);
+  await sleep(350);
   const weekBefore = await ganttShape();
-  const weekBox = await page.locator("#page-tasks .tt-scroll").boundingBox();
-  const wy = weekBox.y + Math.min(60, weekBox.height / 2);
-  const wx = weekBox.x + 40;
-  await page.mouse.move(wx, wy);
-  await page.mouse.down();
-  await page.mouse.move(wx + weekBefore.colW * 7, wy, { steps: 10 });
-  await page.mouse.up();
-  await sleep(320);
+  await scrollByCells(1);
   const weekAfter = await ganttShape();
   check(
-    "周档拖动按整周平移，首日仍是周一",
-    weekAfter.first === weekBefore.first - 7 && weekAfter.weekday === 1 && weekAfter.days === 7,
-    `${weekBefore.first}(周${weekBefore.weekday}) → ${weekAfter.first}(周${weekAfter.weekday})`,
+    "周档：滚一列 = 走一天，时间轴长度不变",
+    weekAfter.visibleFirst === weekBefore.visibleFirst + 1 && weekAfter.days === 365,
+    `${weekBefore.visibleFirst} → ${weekAfter.visibleFirst}`,
   );
   await page.click(rangeBtn("月"));
-  await sleep(250);
+  await sleep(350);
 
   // 双击开抽屉（回归：递归 bug 曾让它打不开）
   await page.locator(".tt-row").first().dblclick();
@@ -4154,11 +4167,12 @@ try {
   };
 
   // 甘特：点表头日期格就地新建（含未来日期）——原来只有日历支持，
-  // 甘特表头只是坐标，想排到未来得先建一条今天的再去改截止日
+  // 甘特表头只是坐标，想排到未来得先建一条今天的再去改截止日。
+  // 2026-11-16 之后**只有表头**是入口（表体空白不再新建，见下一条）
   await page.click(rangeBtn("周"));
   await page.waitForSelector("#page-tasks .tt-date");
-  await sleep(250);
-  const futureCell = page.locator("#page-tasks .tt-date").last();
+  await sleep(300);
+  const futureCell = page.locator("#page-tasks .tt-date.today + .tt-date").first();
   const futureDay = Number(await futureCell.getAttribute("data-day"));
   await futureCell.click();
   await page.waitForSelector(".modal-card.wide");
@@ -4173,35 +4187,22 @@ try {
   );
   await closeDialog();
 
-  // 甘特：点日期列**空白处**（表头以下）也要新建。用户点的多半是这一块，
-  // 只做表头会被当成「点了没反应」。先切到空结果，确保点上没有任何色条。
+  // 空白处**不再**新建（2026-11-16 用户定的原话：「空白也会新建任务，不要」）：
+  // 表体是「看」的地方 —— 行要单击选、双击开抽屉，空白区要能拖着横向滚。
   await page.click('#page-tasks .tools .chip:has-text("已完成")');
   await page.waitForSelector("#page-tasks .empty");
   const blankSpot = await page.evaluate(() => {
-    const grid = document.querySelector("#page-tasks .tt-grid");
-    const label = document.querySelector("#page-tasks .tt-hrow .tt-label");
-    const dates = [...document.querySelectorAll("#page-tasks .tt-date")];
-    const colW = Number.parseFloat(getComputedStyle(grid).getPropertyValue("--tt-col"));
-    const gridBox = grid.getBoundingClientRect();
-    const labelW = label.getBoundingClientRect().width;
-    return {
-      x: gridBox.left + labelW + (dates.length - 0.5) * colW,
-      y: gridBox.top + 50,
-      day: Number(dates.at(-1).getAttribute("data-day")),
-    };
+    const cell = document.querySelector("#page-tasks .tt-date.today");
+    const scroll = document.querySelector("#page-tasks .tt-scroll");
+    const box = cell.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: scroll.getBoundingClientRect().top + 90 };
   });
   await page.mouse.click(blankSpot.x, blankSpot.y);
-  await page.waitForSelector(".modal-card.wide", { timeout: 3000 });
-  const blankIso = await page.evaluate((d) => {
-    const date = new Date(d * 86400000);
-    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-  }, blankSpot.day);
+  await sleep(700);
   check(
-    "甘特点空白日期格新建：截止预填那天",
-    (await dialogDue()) === blankIso,
-    `${await dialogDue()} vs ${blankIso}`,
+    "点表体空白处不会新建任务（入口只在表头日期格）",
+    (await page.locator(".modal-card.wide").count()) === 0,
   );
-  await closeDialog();
   await page.click('#page-tasks .tools .chip:has-text("全部")');
   await sleep(200);
   await page.click(rangeBtn("月"));
