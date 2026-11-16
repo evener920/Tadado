@@ -317,6 +317,17 @@
   font-weight: 500;
 }
 
+/* `.seg` 自己写了 display:flex，会盖掉浏览器给 [hidden] 的 display:none ——
+   不补这一条，切到日历/列表/看板后甘特的时间档还赖在工具行里。 */
+.seg[hidden] {
+  display: none;
+}
+
+/* 甘特的时间跨度档比视图档窄一点，四个按钮 + 标签筛选挤在一行时不抢位置 */
+.tt-range-seg button {
+  padding: 4px 9px;
+}
+
 /* ============ 输入框（原型 .inp）============ */
 .inp {
   font: 400 12.5px var(--font);

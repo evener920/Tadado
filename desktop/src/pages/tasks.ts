@@ -1,14 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // 任务页：时间轴表格（甘特）。
 //
-// **窗口固定 32 天**（`GANTT_DAYS`，2026-09-20 改的口径）：窗口不按任务跨度撑开 ——
-// 它只回答「这一屏是哪一个 32 天」，看别的时间段靠**在表格上拖动**（按天吸附）。
+// **窗口三档**（`GANTT_RANGES`，2026-11-16 加的：周 / 14 天 / 月，默认月）：
+// 窗口不按任务跨度撑开 —— 它只回答「这一屏是哪一段」，看别的时间段靠**在表格上拖动**
+// （按天吸附）。切档改的是这一段有多宽，不是换筛选。
 // （工具行那排「全部 / 昨天 / 今天 / 上周…」档位 2026-09-21 撤了，理由见 `focusAnchor`。）
 // 条形的时间基准是**创建日 → 截止日**；条是**整块实色**（颜色只编码状态），**不画进度** ——
 // 进度在行首那枚**进度饼**、悬停小卡与条内那枚白字进度里（理由见 `renderRow` 那一段）。
 //
 // 左侧任务列吸附（拖动/滚动时留在原地），右侧是按日展开的格子。日期格线不是 DOM
-// 节点而是 repeating-linear-gradient —— 32 天 × 28 行会多出近 900 个只用来画线的
+// 节点而是 repeating-linear-gradient —— 月档 32 天 × 28 行会多出近 900 个只用来画线的
 // div，而线宽和列宽本来就同源，交给 CSS 更准也更快（列宽经 `--tt-col` 一处下发给
 // 表头与格线）。
 //
@@ -75,39 +76,48 @@ type TimelineWin = { start: number; days: number };
  */
 const LABEL_W = 256;
 
-/** 列宽自适应区间（px）：数据少时不至于胖成一列上百像素，多时不至于挤成一根线。 */
+/** 列宽自适应区间（px）。周视图只有 7 天，列要能比月视图宽得多才铺得满。 */
 const COL_MIN = 15;
-const COL_MAX = 34;
+const COL_MAX = 120;
 
 /**
- * 甘特固定窗口：**32 天**（2026-09-20 用户定的：「按 32 天显示最美观」）。
- * 其余时间靠**拖动**看（见 mount 里的拖动平移）。
+ * 甘特时间跨度（2026-11-16 用户定的）：**周 / 14 天 / 月**三档，默认仍是月（32 天）。
  *
- * 后续可能搬进设置做成可配（那时把这里换成读设置项）—— 现在不体现。
+ * 原来是写死的 32 天，看一周得拖半天；现在在工具行上直接切档。天数仍不随数据撑开 ——
+ * 看别的时间段靠拖动（见 mount 里的拖动平移），切档只改变「这一屏有多宽」。
  */
-const GANTT_DAYS = 32;
+const GANTT_RANGES = [
+  { value: "7", label: "周" },
+  { value: "14", label: "14 天" },
+  { value: "32", label: "月" },
+] as const;
+type GanttRange = (typeof GANTT_RANGES)[number]["value"];
+type GanttDays = 7 | 14 | 32;
+let ganttDays: GanttDays = 32;
 
 /**
- * 窗口左端（天数）。默认「**今天前 16 天**」。
+ * 窗口左端（天数）。默认让**今天**落在窗口略偏右的位置。
  *
  * 32 天没法在「今天」两侧各放 16 天（那要 33 天），取整必然偏一天 —— 偏给**过去**：
- * 已经发生的事实要一直看得见，未来只会往后长。所以窗口 = 前 16 天 + 今天 + 后 15 天。
+ * 已经发生的事实要一直看得见，未来只会往后长。所以月视图 = 前 16 天 + 今天 + 后 15 天；
+ * 周 / 14 天用同一条规则，只是偏移量随档位变。
  */
-const defaultAnchor = (): number => TODAY - 16;
+const defaultAnchor = (): number => TODAY - Math.floor(ganttDays / 2);
 let ganttAnchor = defaultAnchor();
 
 /** 当前列宽。拖动平移要按它把位移换算成天数（按天吸附，见 mount）。 */
 let currentColW = 0;
 
 /**
- * 甘特窗口：**固定 32 天，不随数据变**。
+ * 甘特窗口：**当前档位的天数，不随数据变**。
  *
  * 以前它有两种算法：档位 → 严格等于档位（今天 = 1 天，一根根线挤在一起），「全部」→
  * 撑到装下所有任务的跨度（几百天，于是列宽被压成十几像素）。两头都不好看，而且
- * 「点哪个档位都像没反应」。现在窗口只由 `ganttAnchor` 定 ——「看别的时间段」交给拖动。
+ * 「点哪个档位都像没反应」。现在窗口只由 `ganttDays` + `ganttAnchor` 定 ——
+ * 切档改宽度，「看别的时间段」交给拖动。
  */
 function ganttWindow(): TimelineWin {
-  return { start: ganttAnchor, days: GANTT_DAYS };
+  return { start: ganttAnchor, days: ganttDays };
 }
 
 /** 跨页请求进来之后，下一次 render 要把窗口对准这批任务（见 focusAnchor）。 */
@@ -115,7 +125,7 @@ let focusNextRender = false;
 
 /**
  * 窗口该落在哪儿：以这批任务**条形的跨度**（最早创建日 → 最晚截止日）**居中**，
- * 32 天装不下也照居中；一条任务都没有 → 回到默认的「今天前 16 天」。
+ * 当前档位装不下也照居中；一条任务都没有 → 回到本档位的默认位置（见 defaultAnchor）。
  *
  * 2026-09-20 用户报的：从总览点「逾期 40」进来，窗口却停在上次拖动的位置上，目标全在
  * 屏幕外 —— 和「标签筛选留在原处」是同一类「把目标挡在视图外」。
@@ -134,7 +144,7 @@ function focusAnchor(tasks: Task[]): number {
     to = Math.max(to, dayNumber(task.end));
   }
   const mid = Math.floor((from + to) / 2);
-  return mid - Math.floor((GANTT_DAYS - 1) / 2);
+  return mid - Math.floor((ganttDays - 1) / 2);
 }
 
 /** 竖向滚动条的宽度余量。不留的话铺满之后右边会溢出第二条滚动条。 */
@@ -990,6 +1000,27 @@ export function mount(host: HTMLElement): void {
     viewSeg.setValue(next);
     render();
   });
+  viewSeg.root.classList.add("tt-view-seg");
+
+  // 甘特时间跨度：周 / 14 天 / 月。只在甘特视图出现 —— 日历本来就是整月，
+  // 列表和看板没有时间轴，摆一个改不了它们的时间档只会让人以为筛选坏了。
+  const rangeSeg = seg(
+    GANTT_RANGES,
+    String(ganttDays) as GanttRange,
+    (next) => {
+      const days = Number(next) as GanttDays;
+      if (days === ganttDays) return;
+      // 切档时保住当前窗口的**中心**：从月视图切到周视图，看到的是原来那一屏的
+      // 中段，而不是突然跳回今天 —— 否则用户以为拖动的位置被重置了。
+      const center = ganttAnchor + Math.floor((ganttDays - 1) / 2);
+      ganttDays = days;
+      ganttAnchor = center - Math.floor((ganttDays - 1) / 2);
+      rangeSeg.setValue(next);
+      render();
+    },
+  );
+  rangeSeg.root.classList.add("tt-range-seg");
+  rangeSeg.root.title = "甘特图时间跨度：周 / 14 天 / 月";
 
   // ── 标签筛选（替代原来的文本搜索框）──────────────────────────────────────
   // 搜索框只认「字」，而标签是一个个整体：用户点 #工作 就是「给我所有带这个标签的」，
@@ -1152,7 +1183,7 @@ export function mount(host: HTMLElement): void {
   const table = el("div", { class: "tt-box" });
 
   // ── 横向拖动 = 平移窗口 ────────────────────────────────────────────────────
-  // 窗口固定 32 天之后，「看别的时间段」就只剩拖动这一条路（用户的口径：
+  // 窗口宽度由档位定住之后，「看别的时间段」就只剩拖动这一条路（用户的口径：
   // 「其他只需要拖动即可」）。按**天**吸附：拖过半格才挪一天，手感像翻日历，
   // 也不会停在「3.7 天」这种位置上。
   //
@@ -1228,6 +1259,7 @@ export function mount(host: HTMLElement): void {
     el("div", { class: "tt-page" }, [
       el("div", { class: "tools" }, [
         viewSeg.root,
+        rangeSeg.root,
         tagFilter,
         chips,
         urgencyPick.root,
@@ -1242,6 +1274,8 @@ export function mount(host: HTMLElement): void {
   const render = (): void => {
     // 别处可能清了标签筛选（新建 / 导入 / 跨页跳转），按钮文案要跟着变
     syncTagFilter();
+    // 时间跨度只对甘特有意义的控件，别在日历/列表/看板上碍眼
+    rangeSeg.root.hidden = view !== "gantt";
 
     // 顺序：先筛，再让窗口去迁就筛出来的这批（见 focusAnchor）。
     // 反过来「先定窗口、再拿窗口砍任务」的结果就是总览写 4、这里只画 3。
@@ -1264,8 +1298,8 @@ export function mount(host: HTMLElement): void {
 
     const rows = matched.slice(page * taskPageSize, (page + 1) * taskPageSize);
 
-    // 窗口：**固定 32 天**（2026-09-20 用户定的），不随数据撑开 —— 看别的时间段靠**拖动**。
-    // 32 天正好铺满（列宽自适应），所以不再需要「按任务跨度撑窗口」那套（fitWindow 已撤）
+    // 窗口：当前档位（周 / 14 天 / 月），不随数据撑开 —— 看别的时间段靠**拖动**。
+    // 列宽自适应铺满，所以不再需要「按任务跨度撑窗口」那套（fitWindow 已撤）
     const win = ganttWindow();
     const winEnd = win.start + win.days - 1;
 
@@ -1397,12 +1431,12 @@ export function mount(host: HTMLElement): void {
     grid.style.setProperty("--tt-col", `${colW}px`);
     // 周末竖带的位置：窗口首日到**第一个周六**的天数。CSS 那边用「7 天一个周期、
     // 宽 2 天」的 repeating 渐变画，靠 `background-position` 把它挪到这个起点上 ——
-    // 每格一个节点那种画法在 32 天 × 28 行下要多出近千个只用来铺色的 div
+    // 每格一个节点那种画法在月档 32 天 × 28 行下要多出近千个只用来铺色的 div
     const satOffset = (6 - new Date(win.start * DAY_MS).getUTCDay() + 7) % 7;
     grid.style.setProperty("--tt-wk", `${satOffset * colW}px`);
 
-    // 表头那句区间：既是「我现在看的是哪 32 天」，也是**回到今天**的入口 ——
-    // 拖远了之后没有出口就会迷路（窗口固定之后，昨天那批数据可能在屏幕外好几个星期）。
+    // 表头那句区间：既是「我现在看的是哪一段」，也是**回到今天**的入口 ——
+    // 拖远了之后没有出口就会迷路（档位固定之后，昨天那批数据可能在屏幕外好几个星期）。
     // 今天不在窗口里时它变成可点的强调色
     const todayVisible = TODAY >= win.start && TODAY <= winEnd;
     const rangeText = el("span", {
@@ -1410,7 +1444,7 @@ export function mount(host: HTMLElement): void {
       text: todayVisible
         ? `${monthDayText(win.start)} – ${monthDayText(winEnd)}`
         : `↺ 回到今天（${monthDayText(win.start)} – ${monthDayText(winEnd)}）`,
-      title: "窗口固定 32 天 · 在表格上按住拖动可左右平移 · 点这里回到今天",
+      title: `${GANTT_RANGES.find((range) => range.value === String(ganttDays))?.label ?? "月"}视图（${ganttDays} 天） · 在表格上按住拖动可左右平移 · 点这里回到今天`,
     });
     rangeText.addEventListener("click", () => {
       ganttAnchor = defaultAnchor();
@@ -1432,7 +1466,7 @@ export function mount(host: HTMLElement): void {
             el("div", {
               class: "empty",
               // 这里原来写「…区间内没有任务」—— 那是窗口还在**筛掉行**的年代留在话里的
-              // 后遗症（现在窗口固定 32 天，只画不裁）。空表只可能因为状态或标签筛选，
+              // 后遗症（现在窗口只画不裁）。空表只可能因为状态或标签筛选，
               // 所以按这两样说（档位那排同一天撤了）
               text: "当前筛选下没有任务 —— 可切换状态，或清空标签筛选",
             }),
@@ -1455,7 +1489,7 @@ export function mount(host: HTMLElement): void {
 
     table.replaceChildren(
       el("div", { class: "tt-wrap" }, [el("div", { class: "tt-scroll" }, [grid])]),
-      // 窗口固定 32 天，所以翻页时表头的区间不变 —— 换页只是换行，不换时间
+      // 窗口由档位定住，所以翻页时表头的区间不变 —— 换页只是换行，不换时间
       pager({
         page,
         pageCount,

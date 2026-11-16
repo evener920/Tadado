@@ -549,7 +549,7 @@ try {
 
   // ── 总览的数字必须点得开、且对得上 ─────────────────────────────────────────
   // 以前任务页先按档位定窗口、再拿窗口砍任务：总览写「逾期 4」，点进来只有 3 条
-  // —— 第 4 条的起止落在窗口外，它没丢，只是没被画出来。现在窗口固定 32 天、
+  // —— 第 4 条的起止落在窗口外，它没丢，只是没被画出来。现在窗口按时长档位定、
   // **不参与筛选**（档位按「这段时间动过」筛，见 poolTasks）：列表里的行一定画得出来。
   //
   // 名单**从界面上取**（有几张卡就验几张），不再写死一个清单：这条原来列的是
@@ -755,23 +755,32 @@ try {
   check("任务页有行", (await page.locator(".tt-row").count()) > 0);
 
   // ── 四视图切换（甘特 / 日历 / 列表 / 看板）──────────────────────────────
-  // 同一批任务的四种摆法：切换只换下面的内容，搜索词 / 状态 / 优先级 / 计数
+  // 同一批任务的四种摆法：切换只换下面的内容，标签筛选 / 状态 / 优先级 / 计数
   // 全部共用。逐个切一遍，确认各自真的画出来了、点任务能开抽屉，再切回甘特
   // （后面所有断言都建在 .tt-row 上，别把视图停在别处）。
-  const viewSeg = (label) => `#page-tasks .tools .seg button:has-text('${label}')`;
+  const viewSeg = (label) => `#page-tasks .tt-view-seg button:has-text('${label}')`;
   check(
     "任务页工具行有四个视图切换",
-    (await page.locator("#page-tasks .tools .seg button").count()) === 4,
+    (await page.locator("#page-tasks .tt-view-seg button").count()) === 4,
   );
 
   // 切换后高亮要跟着走：seg 是无状态控件，以前只改 view 不回写 setValue，
   // 下方换成日历了蓝色高亮却还钉在「甘特」上 —— 这条回归断言钉住它。
   const segOn = () =>
-    page.locator("#page-tasks .tools .seg button.on").first().textContent();
+    page.locator("#page-tasks .tt-view-seg button.on").first().textContent();
   await page.click(viewSeg("日历"));
   check("切到日历后高亮也在日历上", (await segOn())?.trim() === "日历", await segOn() ?? "");
+  // 时间跨度只对甘特有：日历 / 列表 / 看板上不该留一排改不动它们的时间档
+  check(
+    "非甘特视图隐藏时间跨度档",
+    (await page.locator("#page-tasks .tt-range-seg").isHidden()) === true,
+  );
   await page.click(viewSeg("甘特"));
   check("切回甘特后高亮也在甘特上", (await segOn())?.trim() === "甘特", await segOn() ?? "");
+  check(
+    "回到甘特后时间跨度档重新出现",
+    (await page.locator("#page-tasks .tt-range-seg").isVisible()) === true,
+  );
 
   // 日历：按截止日落格，首次打开自动落到有任务的月份（演示数据在 9 月）
   await page.click(viewSeg("日历"));
@@ -890,10 +899,9 @@ try {
   );
   await pickSort("按优先级"); // 切回默认，后面的用例按默认排序走
 
-  // ── 甘特：固定 32 天窗口 · 拖动平移（2026-09-20 改的模型）────────────────────
-  // 以前窗口跟着档位走：「今天」= 1 天（一屏挤成一根线）、「全部」= 撑到装下所有任务的
-  // 跨度（几百天，列宽被压成十几像素），两头都不好看。现在窗口**固定 32 天**
-  // （前 16 天 + 今天 + 后 15 天），看别的时间段靠拖动 —— 那排档位 2026-09-21 撤了。
+  // ── 甘特：周 / 14 天 / 月三档 · 拖动平移（2026-11-16 加的三档）────────────
+  // 以前窗口写死 32 天，看一周得拖半天；现在工具行上直接切档，切档只改「这一屏多宽」，
+  // 不改筛选。看别的时间段仍然靠拖动。
   const ganttToday = Math.floor(
     Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()) / 86400000,
   );
@@ -918,23 +926,65 @@ try {
         rangeOff: rangeText?.classList.contains("off") ?? false,
       };
     });
-  const ganttStart = await ganttShape();
-  // 窗口恒 32 天、首尾接得上，且**今天落在这 32 天里**（默认窗口就是「今天前 16 天」）。
-  // 档位撤了之后，「窗口对准哪批任务」只在跨页请求进来时发生（另有断言守着那一条）
+  const rangeBtn = (label) => `#page-tasks .tt-range-seg button:has-text('${label}')`;
+  const rangeOn = async () =>
+    ((await page.locator("#page-tasks .tt-range-seg button.on").textContent()) ?? "").trim();
+  // 从总览点进来时窗口可能对准了逾期那批（今天不在屏内）——先点表头回到今天，
+  // 再从三档里点回默认「月」。这样下面三档断言站在一个确定的起点上。
+  await page.click("#page-tasks .tt-range");
+  await sleep(200);
+  await page.click(rangeBtn("月"));
+  await sleep(250);
+  const monthShape = await ganttShape();
   check(
-    "甘特窗口固定 32 天（今天在这一屏里，竖线在）",
-    ganttStart.days === 32 &&
-      ganttStart.last === ganttStart.first + 31 &&
-      // 标准甘特：条上不画进度/范围分段
-      ganttStart.segSplit === 0 &&
-      // 今天在这 32 天里 → 有那条竖线（2026-09-21：今天不在窗口里时**不该**画它）
-      ganttStart.todayAt >= 0 &&
-      ganttStart.todayLine === 1,
-    `${ganttStart.days} 天 · ${ganttStart.first}–${ganttStart.last} · 今天第 ${ganttStart.todayAt} 格 · 条上分段 ${ganttStart.segSplit}`,
+    "甘特默认月档 32 天（今天在这一屏里，竖线在）",
+    monthShape.days === 32 &&
+      monthShape.last === monthShape.first + 31 &&
+      monthShape.segSplit === 0 &&
+      monthShape.todayAt >= 0 &&
+      monthShape.todayLine === 1 &&
+      (await rangeOn()) === "月",
+    `${monthShape.days} 天 · ${monthShape.first}–${monthShape.last} · 今天第 ${monthShape.todayAt} 格 · 条上分段 ${monthShape.segSplit}`,
   );
 
-  // 拖动平移：按**天**吸附（拖两格 = 往过去挪两天）。窗口固定之后，「看别的时间段」
-  // 就只剩拖动这一条路 —— 拖不动的话这 32 天就是死的
+  // 三档切换：只换窗口宽度，首尾接得上、中心不跳、今天仍在屏内、高亮跟着走
+  await page.click(rangeBtn("周"));
+  await sleep(250);
+  const weekShape = await ganttShape();
+  check(
+    "切到周档：7 天一格不缺，中心不跳，高亮在「周」",
+    weekShape.days === 7 &&
+      weekShape.last === weekShape.first + 6 &&
+      weekShape.todayAt >= 0 &&
+      weekShape.todayLine === 1 &&
+      (await rangeOn()) === "周",
+    `${weekShape.days} 天 · 今天第 ${weekShape.todayAt} 格 · 高亮 ${await rangeOn()}`,
+  );
+
+  await page.click(rangeBtn("14 天"));
+  await sleep(250);
+  const halfShape = await ganttShape();
+  check(
+    "切到 14 天档：14 天，今天仍在屏内，高亮在「14 天」",
+    halfShape.days === 14 &&
+      halfShape.last === halfShape.first + 13 &&
+      halfShape.todayAt >= 0 &&
+      halfShape.todayLine === 1 &&
+      (await rangeOn()) === "14 天",
+    `${halfShape.days} 天 · 今天第 ${halfShape.todayAt} 格 · 高亮 ${await rangeOn()}`,
+  );
+
+  await page.click(rangeBtn("月"));
+  await sleep(250);
+  const ganttStart = await ganttShape();
+  check(
+    "切回月档：32 天且高亮回到「月」",
+    ganttStart.days === 32 && (await rangeOn()) === "月",
+    `${ganttStart.days} 天 · 高亮 ${await rangeOn()}`,
+  );
+
+  // 拖动平移：按**天**吸附（拖两格 = 往过去挪两天）。档位定住之后，「看别的时间段」
+  // 就只剩拖动这一条路 —— 拖不动的话这一档就是死的
   const dragOn = async (days) => {
     const box = await page.locator("#page-tasks .tt-scroll").boundingBox();
     const y = box.y + Math.min(60, box.height / 2);
