@@ -928,6 +928,29 @@ try {
         // todayTag 数就是「今天格」数：今天在窗口里=1，被拖出窗口=0
         todayTag: document.querySelectorAll("#page-tasks .tt-date.today .dw.today-tag").length,
         noTodayLine: document.querySelectorAll("#page-tasks .tt-today").length === 0,
+        // 今天整列高亮（2026-11-16 用户提的「高亮一列」）：每行 `.tt-track` 里一条同色带子，
+        // 最后一行下面的空白区再补一条。判据取「与表头那格左右对齐、宽度一致」，
+        // 不硬编码像素 —— 三档的列宽都不一样
+        band: (() => {
+          const cell = document.querySelector("#page-tasks .tt-date.today");
+          const bands = [...document.querySelectorAll("#page-tasks .tt-track .tt-colband")];
+          const voidBand = document.querySelector("#page-tasks .tt-grid > .tt-colband");
+          const grid = document.querySelector("#page-tasks .tt-grid");
+          const rect = (node) => (node ? node.getBoundingClientRect() : null);
+          const c = rect(cell);
+          const first = rect(bands[0]);
+          const v = rect(voidBand);
+          return {
+            rows: bands.length,
+            rowCount: document.querySelectorAll("#page-tasks .tt-row").length,
+            align: c && first ? Math.round(Math.abs(first.left - c.left)) : -1,
+            widthMatch: c && first ? Math.round(Math.abs(first.width - c.width)) : -1,
+            hasVoid: Boolean(voidBand),
+            voidAlign: v && c ? Math.round(Math.abs(v.left - c.left)) : -1,
+            voidBottom: v ? Math.round(v.bottom) : -1,
+            gridBottom: grid ? Math.round(grid.getBoundingClientRect().bottom) : -1,
+          };
+        })(),
         rangeText: rangeText?.textContent?.trim() ?? "",
         rangeOff: rangeText?.classList.contains("off") ?? false,
       };
@@ -952,6 +975,20 @@ try {
       monthShape.noTodayLine &&
       (await rangeOn()) === "月",
     `${monthShape.days} 天 · ${monthShape.first}–${monthShape.last} · 今天第 ${monthShape.todayAt} 格 · 高亮签 ${monthShape.todayTag} · 竖线 ${monthShape.noTodayLine ? "无" : "有"}`,
+  );
+
+  // 整列：每行一条带子（少一条就是「中间某几行没高亮」）+ 空白区一条铺到表底。
+  // 对齐判据用距离而不是写死像素：三档列宽不同，32 天档一列才 33px，差 1px 就看得出来
+  check(
+    "今天整列高亮：每行都有带子，与表头那格对齐，空白区铺到表底",
+    monthShape.band.rows === monthShape.band.rowCount &&
+      monthShape.band.rows > 0 &&
+      monthShape.band.align <= 1 &&
+      monthShape.band.widthMatch <= 1 &&
+      monthShape.band.hasVoid &&
+      monthShape.band.voidAlign <= 1 &&
+      monthShape.band.voidBottom === monthShape.band.gridBottom,
+    `${monthShape.band.rows}/${monthShape.band.rowCount} 行 · 左差 ${monthShape.band.align}px · 宽差 ${monthShape.band.widthMatch}px · 空白带 ${monthShape.band.hasVoid} · 底 ${monthShape.band.voidBottom}/${monthShape.band.gridBottom}`,
   );
 
   // 三档切换：只换窗口宽度，首尾接得上、中心不跳、今天仍在屏内、高亮跟着走
@@ -1099,10 +1136,14 @@ try {
     away.rangeOff &&
       // 今天被拖出窗口 → 表头没有今天格（没有高亮签），比竖线更直观
       away.todayTag === 0 &&
+      // 整列带子也得一起消失：留一条画在屏幕外/夹在边上的色块只会误导
+      away.band.rows === 0 &&
+      !away.band.hasVoid &&
       !home.rangeOff &&
       home.todayTag === 1 &&
+      home.band.rows === home.band.rowCount &&
       home.first === ganttToday - 16,
-    `拖远到 ${away.first}（off=${away.rangeOff}，今天签 ${away.todayTag}）→ 回到 ${home.first}（今天签 ${home.todayTag}）`,
+    `拖远到 ${away.first}（off=${away.rangeOff}，今天签 ${away.todayTag}，带子 ${away.band.rows}）→ 回到 ${home.first}（今天签 ${home.todayTag}，带子 ${home.band.rows}）`,
   );
 
   // 周档拖动按**整周**：拖一天就会把「周一到周日」变成「周四到周三」，

@@ -892,6 +892,29 @@
   background-position: 0 0, var(--tt-wk, 0px) 0;
 }
 
+/* 今天整列高亮（2026-11-16 用户定的：竖线用处不大，改成「高亮一列」）。
+   两块同色带子各画半截：每行 `.tt-track` 里一块，最后一行下面的空白区一块
+   （见 tasks.ts 的 voidBand），接起来是一整条列。
+   行内这块是**先摆**的：同一层里后面的节点画在上面，于是它压得住格线与周末带，
+   又压不住月分隔线和任务条 —— 正的层次。半透明是为了 hover / 选中行换底色时
+   这层跟着变，而不是糊上一块死色。 */
+.tt-colband {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-soft);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* 行内那块要往**下**多铺 2px，盖住行自己的 border-bottom —— 否则每一行交界处
+   都是一道浅色缝，一整列被切成 20 段小色块（放大看特别明显）。2px 而不是 1px：
+   高分屏上 1px 落在半格，仍会透出半条线。
+   空白区那块不用：它本来就压在行底下，铺到网格底为止。 */
+.tt-track .tt-colband {
+  bottom: -2px;
+}
+
 /* 月分隔线（行里那半截）：1px，压在日期带与条之下 —— 先摆它再摆别的，
    所以不需要 z-index */
 .tt-moline {

@@ -818,6 +818,18 @@ function renderRow(
   const track = el("div", { class: "tt-track" });
   track.style.width = `${win.days * colW}px`;
 
+  // 今天整列高亮（2026-11-16 用户定的：竖线撤掉，改成「高亮一列」）。
+  // 先摆这一条再摆月线与条：同一个定位层里**后面的节点画在上面**，于是这层底色
+  // 压得住格线与周末带，又压不住月分隔线和任务条 —— 正是想要的层次。
+  // 列宽和偏移与表头那格同一个算法（`(day - win.start) * colW`），两边严丝合缝。
+  const todayOffset = TODAY - win.start;
+  if (todayOffset >= 0 && todayOffset < win.days) {
+    const band = el("span", { class: "tt-colband" });
+    band.style.left = `${todayOffset * colW}px`;
+    band.style.width = `${colW}px`;
+    track.append(band);
+  }
+
   // 月分隔线：一条 1px 的竖线，标出「这里是 1 号」。32 天窗口最多跨两次月首，
   // 所以每个行里最多两条 —— 比给每个日期格画框省得多（那要多出近千个节点）。
   // 摆在最下层（在日期带和条之下）
@@ -1530,7 +1542,18 @@ export function mount(host: HTMLElement): void {
       render();
     });
 
+    // 最后一行到表格底还有一段空白：行内那条铺不到那儿，这里补一块同色带子。
+    // 放在最前面 —— 它就画在行的**下面**（行的 `.tt-track` 不透明，会盖住它），
+    // 只在空白区露出来，两块接起来才像「一列」。
+    const voidBand = todayVisible ? el("div", { class: "tt-colband" }) : null;
+    if (voidBand) {
+      voidBand.style.top = "36px"; // 表头高度，接在表头那格下面
+      voidBand.style.left = `${LABEL_W + (TODAY - win.start) * colW}px`;
+      voidBand.style.width = `${colW}px`;
+    }
+
     grid.append(
+      ...(voidBand ? [voidBand] : []),
       el("div", { class: "tt-hrow" }, [
         el("div", { class: "tt-label" }, [
           el("span", { class: "dim mono", text: "任务" }),
@@ -1552,10 +1575,11 @@ export function mount(host: HTMLElement): void {
           ]),
     );
 
-    // 「今天」只靠表头那一格高亮标记（2026-11-16 用户定的：贯穿表体的竖线用处不大，
-    // 去掉，改为高亮当天日期）。竖线曾经从表头画到底、还顶着一枚「今天」小签；
-    // 现在这份职责全交给表头 `.tt-date.today`（描边高亮 + 「今天」小签，见 CSS）。
-    // 拖到今天不在窗口里时，那格自然不存在，出口仍是表头那句「↺ 回到今天」。
+    // 「今天」的标记方式（2026-11-16 用户定的）：不要那根贯穿表体的细竖线，改成
+    // **高亮一列** —— 表头那格描边 + 表体整列淡底，上下连起来是一条完整的列。
+    // 两块带子分别铺在：每行的 `.tt-track` 里（压格线、压不住条）与最后一行下面的
+    // 空白区（见上面 voidBand）。今天被拖出窗口时两块都不生成，出口仍是表头的
+    // 「↺ 回到今天」。
 
     table.replaceChildren(
       el("div", { class: "tt-wrap" }, [el("div", { class: "tt-scroll" }, [grid])]),
