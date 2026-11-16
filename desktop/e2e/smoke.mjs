@@ -4119,6 +4119,38 @@ try {
     `${await dialogDue()} vs ${futureIso}`,
   );
   await closeDialog();
+
+  // 甘特：点日期列**空白处**（表头以下）也要新建。用户点的多半是这一块，
+  // 只做表头会被当成「点了没反应」。先切到空结果，确保点上没有任何色条。
+  await page.click('#page-tasks .tools .chip:has-text("已完成")');
+  await page.waitForSelector("#page-tasks .empty");
+  const blankSpot = await page.evaluate(() => {
+    const grid = document.querySelector("#page-tasks .tt-grid");
+    const label = document.querySelector("#page-tasks .tt-hrow .tt-label");
+    const dates = [...document.querySelectorAll("#page-tasks .tt-date")];
+    const colW = Number.parseFloat(getComputedStyle(grid).getPropertyValue("--tt-col"));
+    const gridBox = grid.getBoundingClientRect();
+    const labelW = label.getBoundingClientRect().width;
+    return {
+      x: gridBox.left + labelW + (dates.length - 0.5) * colW,
+      y: gridBox.top + 50,
+      day: Number(dates.at(-1).getAttribute("data-day")),
+    };
+  });
+  await page.mouse.click(blankSpot.x, blankSpot.y);
+  await page.waitForSelector(".modal-card.wide", { timeout: 3000 });
+  const blankIso = await page.evaluate((d) => {
+    const date = new Date(d * 86400000);
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  }, blankSpot.day);
+  check(
+    "甘特点空白日期格新建：截止预填那天",
+    (await dialogDue()) === blankIso,
+    `${await dialogDue()} vs ${blankIso}`,
+  );
+  await closeDialog();
+  await page.click('#page-tasks .tools .chip:has-text("全部")');
+  await sleep(200);
   await page.click(rangeBtn("月"));
   await sleep(250);
 

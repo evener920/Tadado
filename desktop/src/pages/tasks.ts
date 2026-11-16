@@ -122,6 +122,9 @@ let ganttAnchor = defaultAnchor();
 /** 当前列宽。拖动平移要按它把位移换算成天数（按天吸附，见 mount）。 */
 let currentColW = 0;
 
+/** 当前时间窗。点空白日期格新建时要按它把横坐标换算成那一天（见 mount 的事件委托）。 */
+let currentWin: TimelineWin | null = null;
+
 /**
  * 甘特窗口：**当前档位的天数，不随数据变**。
  *
@@ -1274,6 +1277,42 @@ export function mount(host: HTMLElement): void {
   );
   table.addEventListener("dblclick", swallowAfterDrag, true);
 
+  // ── 点日期列的空白处 = 在那天新建 ──────────────────────────────────────────
+  // 表头格自己已经接了 click；这里补上行内 .tt-track 的空白和最后一行下面的大片
+  // 空白 —— 用户说的「未来的格子」多半点在那一块，只做表头会以为没反应。
+  //
+  // 单击/双击要分开：行内双击仍是「打开维护抽屉」。所以单击先缓一拍，第二次
+  // 点击到来（dblclick）就撤销这次新建；拖动余波已被上面的捕获监听拦掉。
+  let pendingCellCreate: number | undefined;
+  const cancelCellCreate = (): void => {
+    if (pendingCellCreate !== undefined) window.clearTimeout(pendingCellCreate);
+    pendingCellCreate = undefined;
+  };
+  table.addEventListener("dblclick", cancelCellCreate, true);
+  table.addEventListener("click", (event) => {
+    if (view !== "gantt" || !currentWin || event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    // 表头格 / 条 / 分页器各有自己的去处，别重复开表单
+    if (target.closest(".tt-date, .tt-bar, .pager")) return;
+    const track = target.closest<HTMLElement>(".tt-track");
+    const scroll = target.closest<HTMLElement>(".tt-scroll");
+    if (!track && !scroll) return;
+    const grid = table.querySelector<HTMLElement>(".tt-grid");
+    if (!grid || currentColW <= 0) return;
+    // 行内按 track 的左缘算；下方空白按 grid 左缘 + 任务列宽算
+    const originX = track
+      ? track.getBoundingClientRect().left
+      : grid.getBoundingClientRect().left + LABEL_W;
+    const offset = Math.floor((event.clientX - originX) / currentColW);
+    if (offset < 0 || offset >= currentWin.days) return;
+    const day = currentWin.start + offset;
+    cancelCellCreate();
+    pendingCellCreate = window.setTimeout(() => {
+      pendingCellCreate = undefined;
+      openCreateTask({ day });
+    }, 240);
+  });
+
   // 工具行和表格包在同一个容器里：直接挂两个子节点给 .page-body，
   // 它的 gap 会和 .tools 自己的 margin-bottom 叠加成 28px。
   host.append(
@@ -1322,6 +1361,7 @@ export function mount(host: HTMLElement): void {
     // 窗口：当前档位（周 / 14 天 / 月），不随数据撑开 —— 看别的时间段靠**拖动**。
     // 列宽自适应铺满，所以不再需要「按任务跨度撑窗口」那套（fitWindow 已撤）
     const win = ganttWindow();
+    currentWin = win;
     const winEnd = win.start + win.days - 1;
 
     // 直接用 .tt-scroll 的 clientWidth：它已经扣掉了容器边框和真实的竖向滚动条，
