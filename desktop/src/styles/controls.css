@@ -447,16 +447,18 @@ body.lock-suppressed .mask {
 }
 
 /* ============ 抽屉里的可编辑字段 ============ */
-/* 标题和标签平时看着像普通文字，悬停才浮出边框、聚焦才染色 ——
-   一进抽屉就满眼输入框，会把「看」和「改」的界限抹掉 */
+/* 标题和标签**始终看得见是个输入框**（2026-11-16 用户报的）：原来这里是
+   「平时像普通文字，悬停才浮边框、聚焦才染色」—— 在「新建任务」对话框里
+   第一眼根本看不到标签框在哪，看着像少了一个字段。想保留「不抢眼」的
+   观感，用淡描边 + 浅底就好，不必把控件本身藏起来。 */
 .dr-title,
 .dr-tags {
   width: 100%;
   min-width: 0;
-  padding: 3px 6px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
+  padding: 5px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  background: var(--surface-2);
   color: var(--text);
   font: 600 14px var(--font);
 }
@@ -466,15 +468,21 @@ body.lock-suppressed .mask {
   color: var(--text-2);
 }
 
+.dr-title::placeholder,
+.dr-tags::placeholder {
+  color: var(--text-3);
+}
+
 .dr-title:hover,
 .dr-tags:hover {
-  border-color: var(--border);
+  border-color: var(--accent);
 }
 
 .dr-title:focus,
 .dr-tags:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
   background: var(--surface-2);
 }
 

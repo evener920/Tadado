@@ -1187,6 +1187,22 @@ try {
   // 无起止」，必须再开抽屉补一遍 —— 那正是它被撤掉的原因。
   await page.click('#page-tasks .ph button:has-text("＋ 新建任务")');
   await page.waitForSelector(".modal-card.wide");
+  // 标题 / 标签框必须**一眼看得见**：原来默认 transparent 边框 + 透明底，
+  // 不悬停就像少了一个字段（2026-11-16 用户报的）
+  const inputVis = await page.evaluate(() => {
+    const read = (sel) => {
+      const s = getComputedStyle(document.querySelector(`.modal-card ${sel}`));
+      return { border: s.borderTopColor, bg: s.backgroundColor, width: s.borderTopWidth };
+    };
+    return { title: read(".dr-title"), tags: read(".dr-tags") };
+  });
+  check(
+    "新建对话框的标题 / 标签输入框默认可见（不是透明隐形）",
+    [inputVis.title, inputVis.tags].every(
+      (s) => s.width !== "0px" && s.border !== "rgba(0, 0, 0, 0)" && s.bg !== "rgba(0, 0, 0, 0)",
+    ),
+    JSON.stringify(inputVis),
+  );
   await page.fill(".modal-card .dr-title", "冒烟新建的任务");
   await page.fill(".modal-card .dr-tags", "#学习");
   await page.click(".modal-card .chip:has-text('进行中')");
@@ -1898,19 +1914,34 @@ try {
     `日期 ${dialEnd.date} · 时刻 ${dialEnd.time}（现在 ${nowHM}）· 提示「${dialEnd.hint}」`,
   );
 
-  // 必填：任务名 / 标签 / 结束时间，缺一个都不落库
+  // 必填：任务名 / 结束时间。标签不再是必填 —— 没写自动归 #收件箱（2026-11-16）
   await page.fill(".modal-card .dr-title", "缺东西的任务");
   await page.click(".modal-card .modal-actions button:has-text('创建')");
-  await sleep(350);
+  await sleep(600);
+  // 有结束时间（默认值还在），应当建成，并自动打上收件箱标签。
+  // 落盘有 400ms 防抖，所以这里等 600ms 再读 localStorage。
+  // TASK_KEY 常量要到测试后段才声明，直接用 db.ts 里的存储键字面量
+  const inboxCreated = await page.evaluate(() => {
+    const raw = localStorage.getItem("tadado.tasks.v1");
+    const tasks = raw ? JSON.parse(raw) : [];
+    const created = tasks.find((task) => task.title === "缺东西的任务");
+    return {
+      found: Boolean(created),
+      tags: created?.tags ?? [],
+      dialogStillOpen: Boolean(document.querySelector(".modal-card.wide")),
+      toast: document.querySelector("#toast")?.textContent?.trim() ?? "",
+    };
+  });
   check(
-    "缺标签时拒绝创建并提示",
-    (await page.locator(".modal-card.wide").count()) === 1 &&
-      ((await page.locator("#toast").textContent()) ?? "").includes("还差") &&
-      (await page.locator(".tt-label", { hasText: "缺东西的任务" }).count()) === 0,
-    (await page.locator("#toast").textContent())?.trim(),
+    "不填标签的任务自动归到 #收件箱（不再拦着不让建）",
+    inboxCreated.found && inboxCreated.tags.includes("#收件箱") && !inboxCreated.dialogStillOpen,
+    JSON.stringify(inboxCreated),
   );
 
-  // 补齐标签，但把结束**清掉**：给了默认值不等于这条规矩没了
+  // 另一处新建：先填标签，但把结束**清掉**：给了默认值不等于这条规矩没了
+  await page.click('#page-tasks .ph button:has-text("＋ 新建任务")');
+  await page.waitForSelector(".modal-card.wide");
+  await page.fill(".modal-card .dr-title", "缺结束的任务");
   await page.fill(".modal-card .dr-tags", "#工作");
   await page.click(".modal-card .dt:has(.dt-time) .dt-quick button:has-text('清除')");
   await sleep(220);
@@ -1920,7 +1951,7 @@ try {
     "清掉结束之后同样拦下来（结束时间是必填）",
     (await page.locator(".modal-card.wide").count()) === 1 &&
       ((await page.locator("#toast").textContent()) ?? "").includes("结束时间") &&
-      (await page.locator(".tt-label", { hasText: "缺东西的任务" }).count()) === 0,
+      (await page.locator(".tt-label", { hasText: "缺结束的任务" }).count()) === 0,
     (await page.locator("#toast").textContent())?.trim(),
   );
   await page.keyboard.press("Escape");

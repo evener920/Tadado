@@ -10,7 +10,7 @@
 // 抽屉是 dataChanged()，对话框是「先攒着，点创建再入库」。
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { MAX_TAGS, normalizeTags } from "../data/tags";
+import { INBOX_TAG, MAX_TAGS, normalizeTags } from "../data/tags";
 import {
   dueTextOf,
   dayNumber,
@@ -247,25 +247,19 @@ export function taskForm(options: TaskFormOptions): TaskForm {
     placeholder: `标签，空格分隔，最多 ${MAX_TAGS} 个（# 可省略）`,
   });
   tags.addEventListener("change", () => {
-    const { tags: next, dropped } = normalizeTags(tags.value);
-
-    if (next.length === 0) {
-      // 标签决定任务在图谱里挂到哪个节点下，空标签等于没有归属
-      if (task.tags.length > 0) {
-        tags.value = task.tags.join(" ");
-        toast("至少要有一个标签 —— 标签决定任务在图谱里挂在哪个节点下");
-      } else {
-        // 新建草稿：允许先空着，提交时的必填校验会说话
-        tags.value = "";
-        task.tags = [];
-      }
-      return;
-    }
+    // 解析为空 = 没写标签 → 自动归到收件箱（2026-11-16 用户定的口径）。
+    // 以前这里对已有任务拒绝清空、对新建草稿留空等提交拦，结果是「不填标签
+    // 就建不了」—— 但收件箱本来就是给「还没想好归到哪」的任务准备的入口，
+    // 把空标签挡在门外等于把这个入口堵死。
+    const { tags: parsed, dropped } = normalizeTags(tags.value);
+    const next = parsed.length === 0 ? [INBOX_TAG] : parsed;
 
     task.tags = next;
+    tags.value = next.join(" ");
     options.onEdit("tags");
     // 超上限的部分明说，不静默丢
     if (dropped.length > 0) toast(`最多 ${MAX_TAGS} 个标签，已忽略 ${dropped.join(" ")}`);
+    else if (parsed.length === 0) toast(`没写标签，已归到 ${INBOX_TAG}`);
     else toast(`标签已改为 ${next.join(" ")}`);
   });
 

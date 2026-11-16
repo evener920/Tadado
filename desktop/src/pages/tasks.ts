@@ -22,6 +22,7 @@ import { parseTasksDetailed, type ParseReport } from "../data/markdown";
 import { TASKS, activeTasks } from "../data/mock";
 import { PARTITIONS, activePartitionId } from "../data/partitions";
 import { dataChanged, onDataChange } from "../data/store";
+import { INBOX_TAG } from "../data/tags";
 import type { Task, Urgency } from "../data/types";
 import { el } from "../shell/dom";
 import { dropdown } from "../shell/menu";
@@ -896,23 +897,26 @@ function openCreateTask(): void {
   createBtn.addEventListener("click", () => {
     const title = draft.title.trim();
 
-    // 必填三项：任务名 / 标签 / 结束时间。缺任何一个都不落库 —— 尤其是标签：
-    // 以前这里有个兜底，没写标签就偷偷塞一个 `#工作`，用户看到的是「我明明写了
-    // 好几个标签，怎么变成一个了」。宁可在这一步拦住并说清缺什么。
+    // 必填两项：任务名 / 结束时间。标签不再是必填 —— 没写就归到 `#收件箱`
+    // （2026-11-16 用户定的）：收件箱就是给「还没想好归到哪」的任务准备的，
+    // 挡着不让建等于把这个入口堵死。兜底只在提交这一刻做，用户写过的标签
+    // 一个都不动（以前那种「偷偷塞个 #工作把用户写的替换掉」不会再有）。
     const missing: string[] = [];
     if (!title) missing.push("任务名");
-    if (draft.tags.length === 0) missing.push("标签");
     if (!draft.due) missing.push("结束时间");
 
     if (missing.length > 0) {
       toast(`还差：${missing.join(" / ")}`);
       const target = !title
         ? form.root.querySelector<HTMLInputElement>(".dr-title")
-        : draft.tags.length === 0
-          ? form.root.querySelector<HTMLInputElement>(".dr-tags")
-          : form.root.querySelector<HTMLInputElement>(".dt:has(.dt-time) .dt-date");
+        : form.root.querySelector<HTMLInputElement>(".dt:has(.dt-time) .dt-date");
       target?.focus();
       return;
+    }
+    if (draft.tags.length === 0) {
+      draft.tags = [INBOX_TAG];
+      const input = form.root.querySelector<HTMLInputElement>(".dr-tags");
+      if (input) input.value = INBOX_TAG;
     }
 
     const id = `task-${Date.now()}`;
