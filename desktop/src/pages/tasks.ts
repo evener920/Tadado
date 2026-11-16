@@ -25,6 +25,7 @@ import { dataChanged, onDataChange } from "../data/store";
 import type { Task, Urgency } from "../data/types";
 import { el } from "../shell/dom";
 import { dropdown } from "../shell/menu";
+import { seg } from "../shell/seg";
 import { subscribePages } from "../shell/router";
 import { toast } from "../shell/toast";
 import {
@@ -32,6 +33,13 @@ import {
   type StatusFilter,
   type UrgencyFilter,
 } from "./focus";
+import {
+  VIEW_OPTIONS,
+  renderBoard,
+  renderCalendar,
+  renderList,
+  type TaskView,
+} from "./taskViews";
 import {
   DAY_MS,
   STATUS_LABEL,
@@ -490,6 +498,12 @@ let query = "";
 let sortKey: SortKey = "urgency";
 let selectedId: string | null = null;
 
+/**
+ * 当前视图。默认甘特 —— 老用户打开还是原来那屏，其他三种从工具行的分段控件切。
+ * 视图状态是模块级的，切到别的页面再回来还停在上次那一档（和筛选条件一样）。
+ */
+let view: TaskView = "gantt";
+
 // ─── 筛选与排序 ──────────────────────────────────────────────────────────────
 
 /**
@@ -932,6 +946,14 @@ export const onAction = (): void => openCreateTask();
 // ─── 页面 ────────────────────────────────────────────────────────────────────
 
 export function mount(host: HTMLElement): void {
+  // 视图切换。四个视图共用下面那一整排筛选/计数/排序 —— 它们是「同一批任务的
+  // 四种摆法」，不是四个页面：切换只换下面那块内容，不动搜索词、状态 chip、优先级
+  // 和页码（日历/看板不看页码，列表与甘特保持一致）。
+  const viewSeg = seg(VIEW_OPTIONS, view, (next) => {
+    view = next;
+    render();
+  });
+
   const search = el("input", { placeholder: "搜索任务名或标签…" });
   search.value = query;
   search.addEventListener("input", () => {
@@ -1010,7 +1032,9 @@ export function mount(host: HTMLElement): void {
   let dragged = false;
 
   table.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || currentColW <= 0) return;
+    // 拖动平移是甘特专属：其他视图里表格没有日期列，拖了也看不见效果，
+    // 却会在背后把甘特窗口挪走（切回去发现位置变了，莫名其妙）
+    if (view !== "gantt" || event.button !== 0 || currentColW <= 0) return;
     dragging = true;
     dragged = false;
     dragFromX = event.clientX;
@@ -1071,6 +1095,7 @@ export function mount(host: HTMLElement): void {
   host.append(
     el("div", { class: "tt-page" }, [
       el("div", { class: "tools" }, [
+        viewSeg.root,
         el("span", { class: "searchbox" }, [
           el("span", { class: "ic", html: SEARCH_ICON }),
           search,
@@ -1167,6 +1192,40 @@ export function mount(host: HTMLElement): void {
     // 两个数都摆出来：筛出几条（当前筛选的结果）/ 一共几条（当前分区未归档）。
     // 少写一个，用户就分不清是「被筛掉了」还是「在别的页上」
     count.textContent = `筛出 ${matched.length} · 共 ${activeTasks().length}`;
+
+    // ── 非甘特视图：日历 / 列表 / 看板 ──────────────────────────────────────
+    // 到这儿筛选与分页都已经算完（上面那一段对四个视图都一样），下面只是「怎么摆」。
+    // 列表沿用分页（一屏装不下），日历/看板一次摆全部：再分页会把「一屏看全」切碎。
+    if (view !== "gantt") {
+      const body =
+        view === "calendar"
+          ? renderCalendar(matched, render)
+          : view === "list"
+            ? renderList(rows)
+            : renderBoard(matched);
+      const nodes: HTMLElement[] = [el("div", { class: "tv-scroll" }, [body])];
+      if (view === "list") {
+        nodes.push(
+          pager({
+            page,
+            pageCount,
+            total: matched.length,
+            size: taskPageSize,
+            onGo: (next) => {
+              page = next;
+              render();
+            },
+            onSize: (size) => {
+              taskPageSize = size;
+              page = 0;
+              render();
+            },
+          }),
+        );
+      }
+      table.replaceChildren(...nodes);
+      return;
+    }
 
     const dayCells: HTMLElement[] = [];
     /** 窗口里的「月初」（最多两个）：行里的月分隔线 + 表头那格改写字月份都靠它。 */

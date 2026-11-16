@@ -691,6 +691,80 @@ try {
   await page.waitForSelector(".tt-row");
   check("任务页有行", (await page.locator(".tt-row").count()) > 0);
 
+  // ── 四视图切换（甘特 / 日历 / 列表 / 看板）──────────────────────────────
+  // 同一批任务的四种摆法：切换只换下面的内容，搜索词 / 状态 / 优先级 / 计数
+  // 全部共用。逐个切一遍，确认各自真的画出来了、点任务能开抽屉，再切回甘特
+  // （后面所有断言都建在 .tt-row 上，别把视图停在别处）。
+  const viewSeg = (label) => `#page-tasks .tools .seg button:has-text('${label}')`;
+  check(
+    "任务页工具行有四个视图切换",
+    (await page.locator("#page-tasks .tools .seg button").count()) === 4,
+  );
+
+  // 日历：按截止日落格，首次打开自动落到有任务的月份（演示数据在 9 月）
+  await page.click(viewSeg("日历"));
+  await page.waitForSelector("#page-tasks .tv-cal-grid");
+  const cal = await page.evaluate(() => ({
+    weeks: document.querySelectorAll("#page-tasks .tv-cal-cell").length,
+    chips: document.querySelectorAll("#page-tasks .tv-cal-chip").length,
+    title: document.querySelector("#page-tasks .tv-cal-title")?.textContent ?? "",
+  }));
+  check(
+    "日历视图：月网格 + 截止任务落格（不空）",
+    cal.weeks >= 28 && cal.chips > 0,
+    JSON.stringify(cal),
+  );
+  const calBefore = cal.title;
+  await page.click('#page-tasks .tv-cal-head button[title="下个月"]');
+  const calNext = await page.locator("#page-tasks .tv-cal-title").textContent();
+  check("日历能翻月", calNext !== calBefore, `${calBefore} → ${calNext}`);
+  const realThisMonth = await page.evaluate(() => {
+    const d = new Date();
+    return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`;
+  });
+  await page.click('#page-tasks .tv-cal-head button:has-text("今天")');
+  const calToday = await page.locator("#page-tasks .tv-cal-title").textContent();
+  check("日历「今天」回到真实当月", calToday?.trim() === realThisMonth, `${calToday} vs ${realThisMonth}`);
+
+  // 列表：紧凑表格，行数应等于当前页筛选出的条数，点行开抽屉
+  await page.click(viewSeg("列表"));
+  await page.waitForSelector("#page-tasks .tv-lr");
+  const listRows = await page.locator("#page-tasks .tv-lr").count();
+  check("列表视图：有行且列头齐全", listRows > 0 && (await page.locator("#page-tasks .tv-lh span").count()) === 6, `rows=${listRows}`);
+  await page.locator("#page-tasks .tv-lr").first().click();
+  check("列表点行能开任务抽屉", await page.locator("#task-drawer.open").count() > 0);
+  await page.keyboard.press("Escape");
+
+  // 看板：三栏齐全，卡片数 = 当前筛选条数；点「完成」把进行中卡片挪到已完成栏
+  await page.click(viewSeg("看板"));
+  await page.waitForSelector("#page-tasks .tv-board");
+  const board = await page.evaluate(() => ({
+    cols: [...document.querySelectorAll("#page-tasks .tv-bcol")].map((c) => c.dataset.status),
+    cards: document.querySelectorAll("#page-tasks .tv-bcard").length,
+  }));
+  check(
+    "看板视图：进行中 / 逾期 / 已完成三栏 + 卡片",
+    board.cols.join(",") === "doing,overdue,done" && board.cards > 0,
+    JSON.stringify(board),
+  );
+  const doingBefore = await page.locator('#page-tasks .tv-bcol[data-status="doing"] .tv-bcard').count();
+  const boardTitle = await page.locator('#page-tasks .tv-bcol[data-status="doing"] .tv-btitle').first().textContent();
+  await page.locator('#page-tasks .tv-bcol[data-status="doing"] .tv-bmove').first().click();
+  const doingAfter = await page.locator('#page-tasks .tv-bcol[data-status="doing"] .tv-bcard').count();
+  // 默认分区的归档口径是「完成即归档」（store.ts 的 ARCHIVE_NOW），所以卡片不会
+  // 出现在「已完成」栏，而是**当场离开看板** —— 这是原有设计，不是流转失效。
+  // 钉「从进行中消失」这条性质，两种归档设置下都成立。
+  check(
+    "看板状态流转：完成后卡片离开进行中栏（默认完成即归档）",
+    doingAfter === doingBefore - 1,
+    JSON.stringify({ boardTitle, doingBefore, doingAfter }),
+  );
+  // 状态改动会广播重绘并写活动，这里不还原（e2e 用独立 localStorage，不影响真实数据）
+
+  await page.click(viewSeg("甘特"));
+  await page.waitForSelector(".tt-row");
+  check("切回甘特：行仍在、视图切换可用", (await page.locator(".tt-row").count()) > 0);
+
   // 页头说明只回答「这里能看到什么」（2026-09-21 用户报的一处 Py 版口径：原来写
   // 「单击选中 · 双击打开维护抽屉 · 右键处置 · 批量迁入在任务管理页」—— 既没说清这一页
   // 是什么，还把别页的入口写进来）。断言只钉**性质**：提到甘特、不提别的页面的入口名、
@@ -2638,6 +2712,7 @@ try {
     "「关于」的功能清单与界面一致（没有不存在的档位 / 过期的条形口径）",
     about.list.every((text) => !text.includes("全年")) &&
       about.list.some((text) => text.includes("创建 → 截止")) &&
+      about.list.some((text) => text.includes("日历") && text.includes("看板")) &&
       about.list.some((text) => text.includes("数据迁入")),
     about.list.join(" | ").slice(0, 160),
   );
