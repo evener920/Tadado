@@ -19,25 +19,26 @@ import {
   togglePinned,
 } from "./window";
 
-/** 用注册表里的热键常量重建提示，避免和实际注册的加速键漂移。 */
+/**
+ * 用注册表里的热键常量**动态建**提示节点，避免和实际注册的加速键漂移。
+ *
+ * 这个节点不能写死在 index.html 里：Ctrl+Shift+Space 是 Tauri 的**全局**热键
+ * （shell/hotkey.ts，经 Rust 侧注册），只在桌面端存在。Web 版（2do.201573.xyz）
+ * 根本没注册它，按了没反应。以前把提示写死在 HTML、再由这里在 Web 上 remove，
+ * 刷新时 JS 执行前会先闪一下「随时唤起」再消失 —— 现在 Web 端压根不建这个节点，
+ * 桌面端才插到置顶按钮前面（见 bindPin 用 need 取同一节点）。
+ */
 function renderHotkeyHint(): void {
-  const hint = need(".hint");
-  // Ctrl+Shift+Space 是 Tauri 的**全局**热键（shell/hotkey.ts，经 Rust 侧注册），
-  // 只在桌面端存在。Web 版（2do.201573.xyz）根本没有注册它，按了没反应；
-  // 留着「随时唤起」的提示只是骗人 —— Web 上直接不显示。
-  if (!isTauri()) {
-    hint.remove();
-    return;
-  }
-  const nodes: Node[] = [];
+  if (!isTauri()) return;
 
+  const hint = el("div", { class: "hint" });
   HOTKEY_KEYS.forEach((key, index) => {
-    if (index > 0) nodes.push(document.createTextNode("+"));
-    nodes.push(el("kbd", { text: key }));
+    if (index > 0) hint.append(document.createTextNode("+"));
+    hint.append(el("kbd", { text: key }));
   });
-  nodes.push(document.createTextNode("随时唤起"));
+  hint.append(document.createTextNode("随时唤起"));
 
-  hint.replaceChildren(...nodes);
+  need("#tb-pin").before(hint);
 }
 
 function bindPin(): void {

@@ -2876,6 +2876,15 @@ try {
       !(await page.locator(".titlebar").textContent())?.includes("随时唤起"),
   );
 
+  // 上面的 DOM 断言只管脚本跑完之后。之前提示写死在 index.html 里，靠 JS 在 Web 上
+  // remove —— 刷新时脚本没执行前会先闪一下再消失（慢网络尤其明显）。所以还要钉住
+  // **静态 HTML 源码本身**不含这个节点，桌面端由 titlebar.ts 动态插入。
+  const rawHtml = await (await fetch(PREVIEW)).text();
+  check(
+    "静态 HTML 不含热键提示（刷新不会闪现）",
+    !rawHtml.includes('class="hint"') && !rawHtml.includes("随时唤起"),
+  );
+
   // 设置一页到底（2026-09-17 撤掉页签）：分三页时每页只剩两三行，翻页成本比滚动
   // 高，还得记住「口令在哪一页」。整页从上到下：外观 → 窗口 → 分区 → 关于
   await page.click("#set-btn");
