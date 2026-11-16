@@ -915,7 +915,11 @@ try {
         first: Number(dates[0]?.getAttribute("data-day") ?? NaN),
         last: Number(dates[dates.length - 1]?.getAttribute("data-day") ?? NaN),
         todayAt: dates.findIndex((node) => node.classList.contains("today")),
+        weekday: new Date(Number(dates[0]?.getAttribute("data-day") ?? 0) * 86400000).getUTCDay(),
         colW: grid ? Number.parseFloat(getComputedStyle(grid).getPropertyValue("--tt-col")) : 0,
+        // 铺满：网格宽度要贴住可滚动区（右边不再留一条空白）
+        gridW: grid ? Math.round(grid.getBoundingClientRect().width) : 0,
+        scrollW: document.querySelector("#page-tasks .tt-scroll")?.clientWidth ?? 0,
         // 标准甘特（2026-09-21）：条上**不画进度、也不按档位切段** —— 这两类段一个都不该有
         segSplit: document.querySelectorAll(
           "#page-tasks .tt-bar .seg-h, #page-tasks .tt-bar .seg-d",
@@ -952,26 +956,31 @@ try {
   await sleep(250);
   const weekShape = await ganttShape();
   check(
-    "切到周档：7 天一格不缺，中心不跳，高亮在「周」",
+    "切到周档：7 天、周一起始、铺满右侧、今天在屏内",
     weekShape.days === 7 &&
       weekShape.last === weekShape.first + 6 &&
+      weekShape.weekday === 1 &&
       weekShape.todayAt >= 0 &&
       weekShape.todayLine === 1 &&
+      // 原来列宽封顶 120px，宽屏上周档右边空一大片；现在网格贴住容器
+      weekShape.scrollW - weekShape.gridW <= 2 &&
       (await rangeOn()) === "周",
-    `${weekShape.days} 天 · 今天第 ${weekShape.todayAt} 格 · 高亮 ${await rangeOn()}`,
+    `${weekShape.days} 天 · 首日周${weekShape.weekday} · 今天第 ${weekShape.todayAt} 格 · 网格 ${weekShape.gridW}/${weekShape.scrollW}px · 列宽 ${weekShape.colW}px`,
   );
 
   await page.click(rangeBtn("14 天"));
   await sleep(250);
   const halfShape = await ganttShape();
   check(
-    "切到 14 天档：14 天，今天仍在屏内，高亮在「14 天」",
+    "切到 14 天档：14 天、周一起始、铺满、高亮在「14 天」",
     halfShape.days === 14 &&
       halfShape.last === halfShape.first + 13 &&
+      halfShape.weekday === 1 &&
       halfShape.todayAt >= 0 &&
       halfShape.todayLine === 1 &&
+      halfShape.scrollW - halfShape.gridW <= 2 &&
       (await rangeOn()) === "14 天",
-    `${halfShape.days} 天 · 今天第 ${halfShape.todayAt} 格 · 高亮 ${await rangeOn()}`,
+    `${halfShape.days} 天 · 首日周${halfShape.weekday} · 今天第 ${halfShape.todayAt} 格 · 网格 ${halfShape.gridW}/${halfShape.scrollW}px`,
   );
 
   await page.click(rangeBtn("月"));
@@ -1075,7 +1084,9 @@ try {
 
   // 拖远了必须**有出口**：今天不在窗口里时，表头那句区间变成强调色的「↺ 回到今天」，
   // 点它回到默认窗口 —— 没有出口的话，昨天那批数据可能在屏幕外好几星期
-  await dragOn(18);
+  // 三档来回切之后月档起点已经是 20763（比默认晚 6 天），拖 18 格今天还落在
+  // 窗口末端，测不出「回到今天」——直接拖到今天彻底出屏
+  await dragOn(26);
   const away = await ganttShape();
   await page.locator("#page-tasks .tt-range").click();
   await sleep(320);
@@ -1090,6 +1101,28 @@ try {
       home.first === ganttToday - 16,
     `拖远到 ${away.first}（off=${away.rangeOff}，线 ${away.todayLine}）→ 回到 ${home.first}（线 ${home.todayLine}）`,
   );
+
+  // 周档拖动按**整周**：拖一天就会把「周一到周日」变成「周四到周三」，
+  // 于是用户截图里那个毛病又回来了。拖 7 格 = 上一周，首日必须还是周一
+  await page.click(rangeBtn("周"));
+  await sleep(250);
+  const weekBefore = await ganttShape();
+  const weekBox = await page.locator("#page-tasks .tt-scroll").boundingBox();
+  const wy = weekBox.y + Math.min(60, weekBox.height / 2);
+  const wx = weekBox.x + 40;
+  await page.mouse.move(wx, wy);
+  await page.mouse.down();
+  await page.mouse.move(wx + weekBefore.colW * 7, wy, { steps: 10 });
+  await page.mouse.up();
+  await sleep(320);
+  const weekAfter = await ganttShape();
+  check(
+    "周档拖动按整周平移，首日仍是周一",
+    weekAfter.first === weekBefore.first - 7 && weekAfter.weekday === 1 && weekAfter.days === 7,
+    `${weekBefore.first}(周${weekBefore.weekday}) → ${weekAfter.first}(周${weekAfter.weekday})`,
+  );
+  await page.click(rangeBtn("月"));
+  await sleep(250);
 
   // 双击开抽屉（回归：递归 bug 曾让它打不开）
   await page.locator(".tt-row").first().dblclick();

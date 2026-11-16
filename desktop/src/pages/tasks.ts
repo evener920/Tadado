@@ -76,9 +76,8 @@ type TimelineWin = { start: number; days: number };
  */
 const LABEL_W = 256;
 
-/** 列宽自适应区间（px）。周视图只有 7 天，列要能比月视图宽得多才铺得满。 */
+/** 列宽下限（px）。窄屏时宁可横向滚动，也不把 32 天挤成一排细线。 */
 const COL_MIN = 15;
-const COL_MAX = 120;
 
 /**
  * 甘特时间跨度（2026-11-16 用户定的）：**周 / 14 天 / 月**三档，默认仍是月（32 天）。
@@ -95,14 +94,29 @@ type GanttRange = (typeof GANTT_RANGES)[number]["value"];
 type GanttDays = 7 | 14 | 32;
 let ganttDays: GanttDays = 32;
 
+/** 把任意一天归到它所在那一周的周一（UTC：周日 0 → 往前退 6 天）。 */
+function mondayOf(day: number): number {
+  return day - ((new Date(day * DAY_MS).getUTCDay() + 6) % 7);
+}
+
 /**
- * 窗口左端（天数）。默认让**今天**落在窗口略偏右的位置。
+ * 窗口左端：以 `day` 为参照给窗口定位。
  *
- * 32 天没法在「今天」两侧各放 16 天（那要 33 天），取整必然偏一天 —— 偏给**过去**：
- * 已经发生的事实要一直看得见，未来只会往后长。所以月视图 = 前 16 天 + 今天 + 后 15 天；
- * 周 / 14 天用同一条规则，只是偏移量随档位变。
+ * 周 / 14 天档**从周一开始**（2026-11-16 用户定的）：7 天 = 周一到周日，
+ * 14 天 = 连续两周。参照点离今天不到一档时直接用今天所在周 —— 否则月切周时
+ * 中心落在周日，新窗口会把今天整甩到右边（截图里周四到周三就是这么来的）。
+ *
+ * 月档仍是滚动的 32 天，今天居中：32 没法两侧各 16 天，取整偏给**过去**
+ * （已发生的事实要一直看得见），所以 = 前 16 天 + 今天 + 后 15 天。
  */
-const defaultAnchor = (): number => TODAY - Math.floor(ganttDays / 2);
+function anchorFor(day: number): number {
+  if (ganttDays === 32) return day - Math.floor(ganttDays / 2);
+  if (Math.abs(day - TODAY) <= Math.floor(ganttDays / 2)) return mondayOf(TODAY);
+  return mondayOf(day);
+}
+
+/** 首屏窗口：没有跨页请求时站在本档位最中性的起点。 */
+const defaultAnchor = (): number => anchorFor(TODAY);
 let ganttAnchor = defaultAnchor();
 
 /** 当前列宽。拖动平移要按它把位移换算成天数（按天吸附，见 mount）。 */
@@ -124,8 +138,8 @@ function ganttWindow(): TimelineWin {
 let focusNextRender = false;
 
 /**
- * 窗口该落在哪儿：以这批任务**条形的跨度**（最早创建日 → 最晚截止日）**居中**，
- * 当前档位装不下也照居中；一条任务都没有 → 回到本档位的默认位置（见 defaultAnchor）。
+ * 窗口该落在哪儿：以这批任务**条形的跨度**（最早创建日 → 最晚截止日）的中心
+ * 定位（周 / 14 天再用 anchorFor 对齐周一）；一条任务都没有 → 本档位默认位置。
  *
  * 2026-09-20 用户报的：从总览点「逾期 40」进来，窗口却停在上次拖动的位置上，目标全在
  * 屏幕外 —— 和「标签筛选留在原处」是同一类「把目标挡在视图外」。
@@ -144,10 +158,10 @@ function focusAnchor(tasks: Task[]): number {
     to = Math.max(to, dayNumber(task.end));
   }
   const mid = Math.floor((from + to) / 2);
-  return mid - Math.floor((ganttDays - 1) / 2);
+  return anchorFor(mid);
 }
 
-/** 竖向滚动条的宽度余量。不留的话铺满之后右边会溢出第二条滚动条。 */
+/** 首轮渲染（还没有 .tt-scroll 可量）时的宽度余量：边框 + 可能的滚动条。 */
 const SCROLL_GUTTER = 16;
 
 const SORTS = [
@@ -172,10 +186,15 @@ const WEEKDAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"];
 
 // ─── 日期窗口与列宽 ──────────────────────────────────────────────────────────
 
-/** 列宽 = 可用宽度按天数平分后再夹到区间里 —— 表格因此永远铺满右侧。 */
+/**
+ * 列宽 = 可用宽度扣掉任务列后按天数均分 —— 表格永远铺满右侧。
+ *
+ * 原来还有个 120px 上限：宽屏上周档 7 天只占 840px，右边留一大片空白（用户截图
+ * 反馈的就是这个）。现在只留下限 —— 窄屏装不下就横向滚动，宽屏一律撑满。
+ */
 function columnWidth(days: number, available: number): number {
-  const room = Math.max(available - SCROLL_GUTTER - LABEL_W, COL_MIN * days);
-  return Math.min(COL_MAX, Math.max(COL_MIN, room / days));
+  const room = Math.max(available - LABEL_W, COL_MIN * days);
+  return Math.max(COL_MIN, room / days);
 }
 
 // ─── 右键菜单 ────────────────────────────────────────────────────────────────
@@ -1010,11 +1029,11 @@ export function mount(host: HTMLElement): void {
     (next) => {
       const days = Number(next) as GanttDays;
       if (days === ganttDays) return;
-      // 切档时保住当前窗口的**中心**：从月视图切到周视图，看到的是原来那一屏的
-      // 中段，而不是突然跳回今天 —— 否则用户以为拖动的位置被重置了。
+      // 切档时保住当前窗口的**中心**（周 / 14 天再对齐到周一），不从用户拖到的
+      // 位置突然跳回今天；中心离今天不到一档时优先今天所在周（见 anchorFor）。
       const center = ganttAnchor + Math.floor((ganttDays - 1) / 2);
       ganttDays = days;
-      ganttAnchor = center - Math.floor((ganttDays - 1) / 2);
+      ganttAnchor = anchorFor(center);
       rangeSeg.setValue(next);
       render();
     },
@@ -1184,8 +1203,8 @@ export function mount(host: HTMLElement): void {
 
   // ── 横向拖动 = 平移窗口 ────────────────────────────────────────────────────
   // 窗口宽度由档位定住之后，「看别的时间段」就只剩拖动这一条路（用户的口径：
-  // 「其他只需要拖动即可」）。按**天**吸附：拖过半格才挪一天，手感像翻日历，
-  // 也不会停在「3.7 天」这种位置上。
+  // 「其他只需要拖动即可」）。月档按**天**吸附；周 / 14 天档按**整周**吸附，
+  // 否则拖一下就从「周一到周日」变成「周四到周三」，周一起始的约定当场破功。
   //
   // 监听挂在 .tt-box 上而**不是** .tt-scroll：后者每次 render 都被换掉（见 render
   // 末尾的 table.replaceChildren），挂上去第一帧之后就收不到事件了。
@@ -1218,7 +1237,9 @@ export function mount(host: HTMLElement): void {
       // 从这一刻起捕获：拖出表格边界（拖到任务列上、拖出窗口）也继续跟手
       table.setPointerCapture(event.pointerId);
     }
-    const days = Math.round(dx / currentColW);
+    // 周 / 14 天按整周走（7 天一步，14 天窗口也始终落在周一）；月档仍按天走
+    const step = ganttDays === 32 ? 1 : 7;
+    const days = Math.round(dx / (currentColW * step)) * step;
     const next = dragFromAnchor - days;
     if (next !== ganttAnchor) {
       ganttAnchor = next;
@@ -1303,9 +1324,15 @@ export function mount(host: HTMLElement): void {
     const win = ganttWindow();
     const winEnd = win.start + win.days - 1;
 
+    // 直接用 .tt-scroll 的 clientWidth：它已经扣掉了容器边框和真实的竖向滚动条，
+    // 不用再猜 16px。首轮还没有这个节点，用 .tt-box 宽度减兜底余量，下一帧重排。
     // 页面隐藏时 clientWidth 量不到（display:none 下是 0），给个够用的兜底值，
     // 切回前台会再 render 一次重算（见 mount 末尾的 subscribePages）
-    const colW = columnWidth(win.days, table.clientWidth > 0 ? table.clientWidth : 1080);
+    const prevScroll = table.querySelector<HTMLElement>(".tt-scroll");
+    const available = prevScroll
+      ? prevScroll.clientWidth
+      : (table.clientWidth > 0 ? table.clientWidth : 1080) - SCROLL_GUTTER;
+    const colW = columnWidth(win.days, available);
     currentColW = colW;
 
     // ── chips（数量随数据变）──
@@ -1512,6 +1539,9 @@ export function mount(host: HTMLElement): void {
   // 曾经这里也要对准一次（那时默认档位是「本周」，不对准两者就各说各话）；档位撤了
   // 之后没有「对谁」这回事了。跨页请求进来时仍会对准（见 consumeTasksRequest）。
   render();
+  // 首轮渲染时还没有 .tt-scroll，可用宽度用的是兜底值。下一帧量到真实的
+  // clientWidth（已扣边框和滚动条）再排一次，右侧才严丝合缝。
+  requestAnimationFrame(render);
   onDataChange(render);
 
   // 抽屉打开时同步选中态；关闭时保留上一次的选中（和表格里点一下的行为一致）
