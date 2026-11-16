@@ -1482,8 +1482,15 @@ export function mount(host: HTMLElement): void {
           // 月首那一格把「周几」换成「几月」：跨月的地方，说清是哪个月比说周几有用
           // （行里同一列还画着一条月分隔线，两处指的是同一根线）
           el("span", {
-            class: "dw",
-            text: isMonthStart ? `${date.getUTCMonth() + 1}月` : WEEKDAY_SHORT[weekday],
+            // 今天那一格把「周几」换成「今天」小签：竖线撤掉之后，表头这格是
+            // 唯一标记「今天在哪一列」的地方，得让眼睛一眼找得到（和日历视图同款）
+            class: `dw${day === TODAY ? " today-tag" : ""}`,
+            text:
+              day === TODAY
+                ? "今天"
+                : isMonthStart
+                  ? `${date.getUTCMonth() + 1}月`
+                  : WEEKDAY_SHORT[weekday],
           }),
         ],
       );
@@ -1545,19 +1552,10 @@ export function mount(host: HTMLElement): void {
           ]),
     );
 
-    // 「今天」那条竖线：**只在今天确实落在窗口里时才画**（2026-09-21 用户提的）。
-    // 拖到别的月份去之后，一条画在屏幕外、或被夹到边上的线只会误导人 ——
-    // 那时候的出口是表头那句「↺ 回到今天」。
-    // 复用上面算好的 `todayVisible`：同一件事（今天在不在窗口里）只判一次
-    if (todayVisible) {
-      const todayLine = el("div", {
-        class: `tt-today${TODAY === win.start ? " at-start" : ""}${
-          TODAY === winEnd ? " at-end" : ""
-        }`,
-      });
-      todayLine.style.left = `${LABEL_W + (TODAY - win.start) * colW + colW / 2}px`;
-      grid.append(todayLine);
-    }
+    // 「今天」只靠表头那一格高亮标记（2026-11-16 用户定的：贯穿表体的竖线用处不大，
+    // 去掉，改为高亮当天日期）。竖线曾经从表头画到底、还顶着一枚「今天」小签；
+    // 现在这份职责全交给表头 `.tt-date.today`（描边高亮 + 「今天」小签，见 CSS）。
+    // 拖到今天不在窗口里时，那格自然不存在，出口仍是表头那句「↺ 回到今天」。
 
     table.replaceChildren(
       el("div", { class: "tt-wrap" }, [el("div", { class: "tt-scroll" }, [grid])]),

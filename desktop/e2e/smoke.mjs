@@ -924,8 +924,10 @@ try {
         segSplit: document.querySelectorAll(
           "#page-tasks .tt-bar .seg-h, #page-tasks .tt-bar .seg-d",
         ).length,
-        // 「今天」那条竖线（只在今天落在窗口里时才该有）
-        todayLine: document.querySelectorAll("#page-tasks .tt-today").length,
+        // 「今天」只靠表头那格标记：竖线（.tt-today）已撤，改为整格高亮 + 「今天」小签。
+        // todayTag 数就是「今天格」数：今天在窗口里=1，被拖出窗口=0
+        todayTag: document.querySelectorAll("#page-tasks .tt-date.today .dw.today-tag").length,
+        noTodayLine: document.querySelectorAll("#page-tasks .tt-today").length === 0,
         rangeText: rangeText?.textContent?.trim() ?? "",
         rangeOff: rangeText?.classList.contains("off") ?? false,
       };
@@ -941,14 +943,15 @@ try {
   await sleep(250);
   const monthShape = await ganttShape();
   check(
-    "甘特默认月档 32 天（今天在这一屏里，竖线在）",
+    "甘特默认月档 32 天（今天这一格高亮，无贯穿竖线）",
     monthShape.days === 32 &&
       monthShape.last === monthShape.first + 31 &&
       monthShape.segSplit === 0 &&
       monthShape.todayAt >= 0 &&
-      monthShape.todayLine === 1 &&
+      monthShape.todayTag === 1 &&
+      monthShape.noTodayLine &&
       (await rangeOn()) === "月",
-    `${monthShape.days} 天 · ${monthShape.first}–${monthShape.last} · 今天第 ${monthShape.todayAt} 格 · 条上分段 ${monthShape.segSplit}`,
+    `${monthShape.days} 天 · ${monthShape.first}–${monthShape.last} · 今天第 ${monthShape.todayAt} 格 · 高亮签 ${monthShape.todayTag} · 竖线 ${monthShape.noTodayLine ? "无" : "有"}`,
   );
 
   // 三档切换：只换窗口宽度，首尾接得上、中心不跳、今天仍在屏内、高亮跟着走
@@ -961,7 +964,7 @@ try {
       weekShape.last === weekShape.first + 6 &&
       weekShape.weekday === 1 &&
       weekShape.todayAt >= 0 &&
-      weekShape.todayLine === 1 &&
+      weekShape.todayTag === 1 &&
       // 原来列宽封顶 120px，宽屏上周档右边空一大片；现在网格贴住容器
       weekShape.scrollW - weekShape.gridW <= 2 &&
       (await rangeOn()) === "周",
@@ -977,7 +980,7 @@ try {
       halfShape.last === halfShape.first + 13 &&
       halfShape.weekday === 1 &&
       halfShape.todayAt >= 0 &&
-      halfShape.todayLine === 1 &&
+      halfShape.todayTag === 1 &&
       halfShape.scrollW - halfShape.gridW <= 2 &&
       (await rangeOn()) === "14 天",
     `${halfShape.days} 天 · 首日周${halfShape.weekday} · 今天第 ${halfShape.todayAt} 格 · 网格 ${halfShape.gridW}/${halfShape.scrollW}px`,
@@ -1094,12 +1097,12 @@ try {
   check(
     "拖远之后能一键回到今天（表头那句区间就是入口）",
     away.rangeOff &&
-      // 今天被拖出窗口 → 那条竖线**不画**（线在屏幕外、或被夹在边上，只会误导）
-      away.todayLine === 0 &&
+      // 今天被拖出窗口 → 表头没有今天格（没有高亮签），比竖线更直观
+      away.todayTag === 0 &&
       !home.rangeOff &&
-      home.todayLine === 1 &&
+      home.todayTag === 1 &&
       home.first === ganttToday - 16,
-    `拖远到 ${away.first}（off=${away.rangeOff}，线 ${away.todayLine}）→ 回到 ${home.first}（线 ${home.todayLine}）`,
+    `拖远到 ${away.first}（off=${away.rangeOff}，今天签 ${away.todayTag}）→ 回到 ${home.first}（今天签 ${home.todayTag}）`,
   );
 
   // 周档拖动按**整周**：拖一天就会把「周一到周日」变成「周四到周三」，

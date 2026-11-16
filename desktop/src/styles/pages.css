@@ -183,7 +183,7 @@
 /* 「现在」那条竖线。**不吃指针事件**（2026-09-21 修）：它是一条坐标系标记，却横跨整条轴 ——
    压在簇气泡上时，那个簇就**点不开了**（e2e 正是在这一步超时的：跑测试的时刻一变，
    竖线就滑到簇头上；用户遇到的是同一件事）。顶端那枚小签**单独放行**：它自己有 `title`
-   （「现在 16:40」），悬停仍要看得到。任务页的同类竖线 `.tt-today` 一直是这么写的 */
+   （「现在 16:40」），悬停仍要看得到 */
 .tdt-now {
   position: absolute;
   top: 8px;
@@ -720,12 +720,28 @@
   background: var(--bg-2);
 }
 
-/* 今天：底色 + 一条**底线**。底线和行里那条竖线说的是同一件事，一个在头一个在身 */
+/* 今天（2026-11-16 改为整格高亮）：原来只是淡底 + 底线，再配一根贯穿表体的竖线。
+   竖线撤掉后，这一格是标记「今天在哪一列」的唯一线索，做足：实心描边 + 淡底 +
+   加粗数字 + 「今天」小签，让眼睛扫一眼就落在这一列。周几那行在 JS 里换成了「今天」。 */
 .tt-date.today {
   color: var(--accent);
   font-weight: 600;
   background: var(--accent-soft);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  z-index: 7;
+}
+
+/* 「今天」小签：替代原来挂在竖线顶端的那枚。压在周几那行位置，
+   维持表头两行的节奏，不必额外占高。 */
+.tt-date.today .dw.today-tag {
+  display: inline-block;
+  font: 600 9px var(--font);
+  color: #fff;
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  opacity: 1;
+  line-height: 13px;
 }
 
 /* 月首：左侧一条分隔线，和行里的 .tt-moline 对齐（同一根线，两处各画一半：
@@ -753,7 +769,7 @@
 
 /* 任务列横向吸附：日期轴滚到右边时左边仍看得见任务名。
    宽度 248 → 256（2026-09-20）：行首那枚圆点换成 16px 的进度饼。**必须与 tasks.ts
-   的 LABEL_W 同步** —— 少改一处，表头那条「今天」竖线（按 LABEL_W + 天数算）就会偏 8px */
+   的 LABEL_W 同步** —— 少改一处，行内的月分隔线和周末竖带（都从 LABEL_W 起算）就会偏 8px */
 .tt-label {
   width: 256px;
   flex: none;
@@ -1076,47 +1092,6 @@
   background: var(--surface);
   z-index: 3;
   pointer-events: none;
-}
-
-/* 今天：一条 2px 的强调线，从表头下面画到底（表头那格自己已经有底色与底线，
-   再压一条会显得脏）。**只在今天确实落在窗口里时才画** —— 见 tasks.ts */
-.tt-today {
-  position: absolute;
-  top: 36px;
-  bottom: 0;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--accent);
-  opacity: 0.5;
-  z-index: 4;
-  pointer-events: none;
-}
-
-.tt-today::before {
-  content: "今天";
-  position: absolute;
-  top: 3px;
-  left: 50%;
-  transform: translateX(-50%);
-  font: 500 9px var(--font);
-  color: #fff;
-  background: var(--accent);
-  padding: 1px 5px;
-  border-radius: 4px;
-  white-space: nowrap;
-}
-
-/* 贴到窗口两端时这个小签贴边对齐：居中的话它会伸到任务列底下（被吸附列盖掉半截），
-   或者越过右边界把表格撑宽 */
-.tt-today.at-start::before {
-  left: 0;
-  transform: none;
-}
-
-.tt-today.at-end::before {
-  left: auto;
-  right: 0;
-  transform: none;
 }
 
 .tt-tip {
