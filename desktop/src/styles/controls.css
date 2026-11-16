@@ -609,6 +609,83 @@ body.lock-suppressed .mask {
   bottom: calc(100% + 4px);
 }
 
+/* ============ 任务页的标签筛选 ============
+   替代原来的文本搜索框。它是**多选**：按钮上写已选的标签，菜单里每项后面挂
+   当前分区的任务数；选中态沿用 .chip.on 那套色，但整行可点，命中区域更大。 */
+.tag-filter .dd-btn {
+  min-width: 104px;
+  justify-content: space-between;
+  white-space: nowrap;
+}
+
+.tag-filter .dd-btn.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tag-filter .dd-btn .tf-n {
+  font: 600 10px var(--mono);
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.tag-filter .tag-menu {
+  min-width: 190px;
+  max-height: min(360px, 70vh);
+  overflow: auto;
+}
+
+.tag-filter .tag-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.tag-filter .tag-opt:hover {
+  background: var(--hover);
+}
+
+.tag-filter .tag-opt.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 500;
+}
+
+.tag-filter .tg-ck {
+  width: 14px;
+  flex: none;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.tag-filter .tg-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-filter .tg-n {
+  margin-left: auto;
+  font: 500 10.5px var(--mono);
+  color: var(--text-3);
+}
+
+.tag-filter .tag-hint {
+  margin-top: 4px;
+  padding: 6px 9px 2px;
+  border-top: 1px solid var(--border-2);
+  font-size: 10.5px;
+  color: var(--text-3);
+  cursor: default;
+}
+
 /* ============ 二次确认浮层（confirm.ts）============ */
 /* 层级要压过 tooltip(98) 和 toast(99)：确认框弹出期间不该再被别的东西盖住 */
 .mask {

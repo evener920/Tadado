@@ -186,6 +186,69 @@ try {
     await sleep(280);
   };
 
+  /**
+   * 任务页在 2026-11-16 把文本搜索框换成了标签筛选。按标题找行时不能再
+   * `fill(searchbox)` —— 现在改成「复位筛选 + 逐页翻 DOM」，不依赖跨用例残留的
+   * 搜索状态（那种残留以前会让断言在「筛掉一切」的状态下假通过）。
+   */
+  const resetTaskFilters = async () => {
+    await page.locator('.rail-btn[data-page="tasks"]').click();
+    await sleep(220);
+    await page.click('#page-tasks .chips .chip:has-text("全部")');
+    const urg = page.locator("#page-tasks .tools .dd:not(.tag-filter) .dd-btn").first();
+    if (((await urg.textContent()) ?? "").trim() !== "全部优先级") {
+      await urg.click();
+      await page.click(
+        '#page-tasks .tools .dd:not(.tag-filter) .menu.open .menu-item:has-text("全部优先级")',
+      );
+    }
+    if (await page.locator("#page-tasks .tag-filter .dd-btn.on").count()) {
+      await page.click("#page-tasks .tag-filter .dd-btn");
+      await page.waitForSelector("#page-tasks .tag-menu.open .tag-opt");
+      await page.locator("#page-tasks .tag-menu.open .tag-opt").first().click();
+    }
+    const prev = page.locator("#page-tasks .pager .navbtn").first();
+    for (let i = 0; i < 20 && (await prev.count()); i += 1) {
+      if (await prev.evaluate((button) => button.disabled)) break;
+      await prev.click();
+      await sleep(80);
+    }
+  };
+
+  /** 翻遍任务页所有分页，收集行标题。 */
+  const collectTaskTitles = async () => {
+    await resetTaskFilters();
+    const out = [];
+    for (let i = 0; i < 20; i += 1) {
+      out.push(
+        ...(await page.evaluate(() =>
+          [...document.querySelectorAll("#page-tasks .tt-row .lt1 .t")].map(
+            (node) => node.textContent?.trim() ?? "",
+          ),
+        )),
+      );
+      const next = page.locator("#page-tasks .pager .navbtn").last();
+      if (!(await next.count()) || (await next.evaluate((button) => button.disabled))) break;
+      await next.click();
+      await sleep(120);
+    }
+    return out;
+  };
+
+  /** 逐页找到标题所在的行，返回可继续 dblclick 的 locator；找不到返回 null。 */
+  const findTaskRow = async (title) => {
+    await resetTaskFilters();
+    for (let i = 0; i < 20; i += 1) {
+      const row = page.locator("#page-tasks .tt-row").filter({ hasText: title }).first();
+      if (await row.count()) return row;
+      const next = page.locator("#page-tasks .pager .navbtn").last();
+      if (!(await next.count()) || (await next.evaluate((button) => button.disabled))) break;
+      await next.click();
+      await sleep(120);
+    }
+    return null;
+  };
+
   // ── 切页只显示一页 ──
   // 显隐由 `.page.active` 控制。曾有一条 ID 选择器规则（`#page-graph` 上的
   // display:flex）优先级压过 `.page { display:none }`，图谱页于是永远可见，把
@@ -1532,10 +1595,17 @@ try {
   await page.click(".modal-card .modal-actions button:has-text('创建')");
   await sleep(450);
 
-  // 先搜出来再断言：100 条数据下，刚建的任务未必落在当前这一页上（排序 + 分页都会
-  // 把它挤出去）—— 直接 locator 一行都匹配不到，表现就是「(没有标签)」这种看不出
-  // 所以然的失败（曾经当成 flaky 放过去两次）
-  await page.fill("#page-tasks .searchbox input", "多标签任务");
+  // 先用**新标签**筛出来再断言：100 条数据下，刚建的任务未必落在当前这一页上
+  // （排序 + 分页都会把它挤出去）—— 直接 locator 一行都匹配不到，表现就是
+  // 「(没有标签)」这种看不出所以然的失败（曾经当成 flaky 放过去两次）。
+  // 这里同时钉住「标签不是固定集合」：手输的 #新标签 得立刻能拿来做筛选项。
+  await page.click("#page-tasks .tag-filter .dd-btn");
+  await page.waitForSelector("#page-tasks .tag-menu.open .tag-opt");
+  const newTagRow = page
+    .locator("#page-tasks .tag-menu.open .tag-opt", { hasText: "#新标签" })
+    .first();
+  check("手输的新标签立刻成为可筛选项", (await newTagRow.count()) === 1);
+  if (await newTagRow.count()) await newTagRow.click();
   // **等这一行出现**再断言，而不是睡一个固定时长：建任务 → 数据广播 → 重画 是异步的，
   // 睡 350ms 在稍慢的机器上就落在重画之前，于是 `multi` 匹配不到任何行，报出来的是
   // 「(没有标签)」—— 看不出所以然，曾经被当成 flaky 放过两次。等不到就算失败，
@@ -1551,7 +1621,7 @@ try {
       stored: (JSON.parse(localStorage.getItem("tadado.tasks.v1") ?? "[]")).filter(
         (task) => (task.title ?? "").includes("多标签"),
       ).length,
-      query: document.querySelector("#page-tasks .searchbox input")?.value ?? "",
+      tag: document.querySelector("#page-tasks .tag-filter .dd-btn")?.textContent?.trim() ?? "",
     }));
     console.log(`  ⚠ 没等到「多标签任务」这一行：${JSON.stringify(why)}`);
   }
@@ -1590,8 +1660,8 @@ try {
       (await multi.locator(".lt2 .urg").count()) === 1,
     `第一行 ${lt1Kids} 个子节点`,
   );
-  // 搜索词留着会污染后面的用例（它们按行文案找元素）
-  await page.fill("#page-tasks .searchbox input", "");
+  // 标签筛选留着会污染后面的用例（它们按行文案找元素）
+  await page.locator("#page-tasks .tag-menu.open .tag-opt").first().click();
   await sleep(300);
 
   // 焦点时间轴（今天档）以前把「没有时刻」的任务整条丢掉 —— 新建时的时分是可选的，
@@ -2099,11 +2169,8 @@ try {
     importedRows.first === 1 && importedRows.second === 1,
     JSON.stringify(importedRows),
   );
-  // 回任务页把搜索框清干净（下面几条断言还站在这一页上做）
-  await page.locator('.rail-btn[data-page="tasks"]').click();
-  await sleep(320);
-  await page.fill("#page-tasks .searchbox input", "");
-  await sleep(300);
+  // 回任务页把筛选清干净（下面几条断言还站在这一页上做）
+  await resetTaskFilters();
 
   // 导入成功后重开，不该还带着上一次选的文件
   await openImport();
@@ -2131,14 +2198,13 @@ try {
   );
   await page.click(".modal-actions .btn.primary"); // 默认走「跳过重复」
   await sleep(400);
-  await page.locator('.rail-btn[data-page="tasks"]').click();
-  await sleep(320);
-  await page.fill("#page-tasks .searchbox input", "批量一");
-  await sleep(350);
-  const dupRows = await page.locator(".tt-row").count();
-  check("跳过重复：同名的那条没有被再建一遍", dupRows === 1, `匹配到 ${dupRows} 行`);
-  await page.fill("#page-tasks .searchbox input", "");
-  await sleep(300);
+  const dupRows = await page.evaluate(
+    () =>
+      JSON.parse(localStorage.getItem("tadado.tasks.v1") ?? "[]").filter(
+        (task) => (task.title ?? "").trim() === "批量一",
+      ).length,
+  );
+  check("跳过重复：同名的那条没有被再建一遍", dupRows === 1, `存档里同名的有 ${dupRows} 条`);
 
   // ── 写法里的「活动行」：任务下面缩进的一行，属于它的活动时间线 ──────────────
   // 活动分析导出的清单就是这个形状（标签 → 任务 → 活动三层），迁移旧数据时它是
@@ -2155,11 +2221,9 @@ try {
   await sleep(450);
 
   // 回任务页看结果
-  await page.locator('.rail-btn[data-page="tasks"]').click();
-  await sleep(320);
-  await page.fill("#page-tasks .searchbox input", "带活动历史");
-  await sleep(350);
-  await page.locator(".tt-row", { hasText: "带活动历史" }).first().dblclick();
+  const historyRow = await findTaskRow("带活动历史");
+  check("导入的任务在任务页能翻页找到", historyRow !== null);
+  if (historyRow) await historyRow.dblclick();
   await page.waitForSelector("#task-drawer.open");
   await sleep(300);
   // 只读**时间线那一块**。以前读的是整张抽屉的文字，于是「比顺序」这件事会被抽屉里
@@ -2190,8 +2254,7 @@ try {
   check("导入的任务：创建日取最早一条活动的日期", createdText.includes("08-25"), createdText);
   await page.keyboard.press("Escape");
   await sleep(300);
-  await page.fill("#page-tasks .searchbox input", "");
-  await sleep(300);
+  await resetTaskFilters();
 
   // 当前分区要在 rail 上看得见，**不用悬浮**：那个入口原先只有一个文件夹图标，名字只
   // 在它的 title 里。rail 有 64px，图标下面那一行放得下四五个汉字
@@ -3557,16 +3620,15 @@ try {
   await page.click(".modal-actions .btn.primary");
   await sleep(450);
 
-  await page.locator('.rail-btn[data-page="tasks"]').click();
-  await sleep(320);
-  await page.fill("#page-tasks .searchbox input", "示例任务");
-  await sleep(350);
-  const toolRows = await page.locator(".tt-row").count();
+  const toolTitles = await collectTaskTitles();
+  const toolRows = toolTitles.filter((title) => title.includes("示例任务")).length;
   check("转换工具的输出：导入后 3 条都在", toolRows === 3, `匹配到 ${toolRows} 行`);
 
   // 活动历史也一起过来了：这条任务在源清单里横跨两个标签组、共 4 行活动，
   // 其中 2 行是旧版自动写下的系统记录（延后处理 / 状态变更）—— 滤掉后剩 2 行人写的
-  await page.locator(".tt-row", { hasText: "示例任务三" }).first().dblclick();
+  const toolRow = await findTaskRow("示例任务三");
+  check("转换工具的输出：任务能在任务页找到", toolRow !== null);
+  if (toolRow) await toolRow.dblclick();
   await page.waitForSelector("#task-drawer.open");
   await sleep(320);
   const toolHistory = await page.locator("#task-drawer .tl-entry").count();
@@ -3577,8 +3639,7 @@ try {
   );
   await page.keyboard.press("Escape");
   await sleep(250);
-  await page.fill("#page-tasks .searchbox input", "");
-  await sleep(300);
+  await resetTaskFilters();
 
   // ── 完成后归档：默认「立即」＝勾完即离开任务页；改成「N 天」＝在任务页存活 N 天 ──
   // （2026-09-21 定的口径：判据从「结束日 + N」改成「**完成日** + N」，档位也从
@@ -3663,14 +3724,11 @@ try {
       return hit ? { title: hit.title, status: hit.status } : null;
     }, skip ?? "");
 
-  /** 到任务页搜出这条、打开抽屉点「已完成」，返回搜到几行。 */
+  /** 到任务页逐页翻出这条、打开抽屉点「已完成」，返回是否找到（1/0）。 */
   const completeViaDrawer = async (title) => {
-    await page.locator('.rail-btn[data-page="tasks"]').click();
-    await sleep(320);
-    await page.fill("#page-tasks .searchbox input", title);
-    await sleep(400);
-    const row = page.locator("#page-tasks .tt-row").filter({ hasText: title }).first();
-    const found = await row.count();
+    const row = await findTaskRow(title);
+    const found = row ? 1 : 0;
+    if (!row) return 0;
     await row.dblclick();
     await page.waitForSelector("#task-drawer.open");
     await sleep(330);
@@ -3845,9 +3903,7 @@ try {
   // 收尾：筛选与档位复位，归档档位拨回「立即」（= 默认）—— 后面的用例（含重启）不该被这段影响
   await page.locator("#page-manage .chip:has-text('未归档')").click();
   await sleep(200);
-  await page.locator('.rail-btn[data-page="tasks"]').click();
-  await sleep(300);
-  await page.fill("#page-tasks .searchbox input", "");
+  await resetTaskFilters();
   await setArchiveFor("立即");
 
   check("无 console 报错", consoleErrors.length === 0, consoleErrors.slice(0, 3).join(" | "));
@@ -4042,6 +4098,111 @@ try {
     await tagsInput.inputValue(),
   );
   await closeDialog();
+
+  // ── 标签筛选（替代文本搜索）──────────────────────────────────────────────
+  // 搜索按“字”匹配，标签是一个个整体。钉住三件事：工具行不再有输入框；
+  // 下拉里的标签带计数、点了真按标签筛；多选保持展开、清空能回到全量。
+  // 前面的分区用例把当前分区留在了空的「学习」——先切回演示空间，否则菜单里
+  // 全是 0 条的预置标签，这条会像「筛坏了」一样假红。
+  await page.click("#part-btn");
+  await sleep(200);
+  await page.click(".part-item[data-part='demo']");
+  await sleep(350);
+  await resetTaskFilters();
+  check(
+    "任务页工具行不再有文本搜索框",
+    (await page.locator("#page-tasks .tools input").count()) === 0,
+  );
+  check(
+    "任务页有标签筛选入口",
+    (await page.locator("#page-tasks .tag-filter .dd-btn").count()) === 1,
+  );
+
+  // 状态 / 优先级先复位，标签选项后面的数字才能和「筛出 N」直接对上
+  await page.click('#page-tasks .chips .chip:has-text("全部")');
+  const urgencyBtn = page
+    .locator("#page-tasks .tools .dd:not(.tag-filter) .dd-btn")
+    .first();
+  if (((await urgencyBtn.textContent()) ?? "").trim() !== "全部优先级") {
+    await urgencyBtn.click();
+    await page.click(
+      '#page-tasks .tools .dd:not(.tag-filter) .menu.open .menu-item:has-text("全部优先级")',
+    );
+  }
+
+  await page.click("#page-tasks .tag-filter .dd-btn");
+  await page.waitForSelector("#page-tasks .tag-menu.open .tag-opt");
+  const tagOpts = page.locator("#page-tasks .tag-menu.open .tag-opt");
+  let pickIdx = -1;
+  let pickName = "";
+  let pickCount = 0;
+  for (let i = 1; i < (await tagOpts.count()); i += 1) {
+    const name = (await tagOpts.nth(i).locator(".tg-name").textContent())?.trim() ?? "";
+    const count = Number.parseInt(
+      (await tagOpts.nth(i).locator(".tg-n").textContent()) ?? "0",
+      10,
+    );
+    if (!name || !(count > 0)) continue;
+    pickIdx = i;
+    pickName = name;
+    pickCount = count;
+    break;
+  }
+  check(
+    "标签筛选菜单列出带计数的真实标签",
+    pickIdx > 0 && pickCount > 0,
+    `${await tagOpts.count()} options`,
+  );
+  await tagOpts.nth(pickIdx).click();
+  const afterOne = await page.evaluate(
+    () => document.querySelector("#page-tasks .tools .dim.mono")?.textContent ?? "",
+  );
+  check(
+    "点标签即按标签筛选，行数与标签计数一致",
+    afterOne.includes(`筛出 ${pickCount} ·`),
+    `${pickName} => ${afterOne}`,
+  );
+  check(
+    "筛选按钮显示已选标签",
+    ((await page.locator("#page-tasks .tag-filter .dd-btn").textContent()) ?? "").includes(
+      pickName,
+    ),
+  );
+
+  // 菜单刻意保持展开，连点第二个标签即可叠加（并集）
+  check("选完一个标签后菜单仍可继续点", (await page.locator("#page-tasks .tag-menu.open").count()) === 1);
+  const opts2 = page.locator("#page-tasks .tag-menu.open .tag-opt");
+  let idx2 = -1;
+  for (let i = 1; i < (await opts2.count()); i += 1) {
+    const name = (await opts2.nth(i).locator(".tg-name").textContent())?.trim() ?? "";
+    const count = Number.parseInt((await opts2.nth(i).locator(".tg-n").textContent()) ?? "0", 10);
+    if (name && name !== pickName && count > 0) {
+      idx2 = i;
+      break;
+    }
+  }
+  if (idx2 > 0) {
+    await opts2.nth(idx2).click();
+    check(
+      "多选取并集：按钮显示 +1 且仍筛出任务",
+      ((await page.locator("#page-tasks .tag-filter .dd-btn").textContent()) ?? "").includes("+1") &&
+        !(
+          (await page.evaluate(
+            () => document.querySelector("#page-tasks .tools .dim.mono")?.textContent ?? "",
+          )) ?? ""
+        ).includes("筛出 0 ·"),
+    );
+  }
+
+  await page.locator("#page-tasks .tag-menu.open .tag-opt").first().click();
+  const cleared = await page.evaluate(
+    () => document.querySelector("#page-tasks .tools .dim.mono")?.textContent ?? "",
+  );
+  check(
+    "点「全部标签」清空筛选，行数回到全量",
+    !cleared.includes("筛出 0 ·") && !cleared.includes(pickName),
+    cleared,
+  );
 
   // 存档彻底坏掉：不能当空库处理（那等于拿演示数据把用户的存档盖掉），
   // 要原样留着 + 给一句人话提示

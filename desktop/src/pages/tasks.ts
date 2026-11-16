@@ -12,9 +12,9 @@
 // div，而线宽和列宽本来就同源，交给 CSS 更准也更快（列宽经 `--tt-col` 一处下发给
 // 表头与格线）。
 //
-// 工具行（搜索框 / 计数 / 排序）在 mount 里建一次就常驻，只有 chips 里的
-// 数字和下面的表格随数据重建 —— 否则每次输入都要把搜索框重新造一遍，
-// 光标和输入法组合状态都会断。拖动平移的监听也挂在 mount 里建的那层（`.tt-box`）：
+// 工具行（标签筛选 / 计数 / 排序）在 mount 里建一次就常驻，只有 chips 里的
+// 数字和下面的表格随数据重建 —— 否则每次筛选都要把下拉重新造一遍，
+// 展开状态和连点体验都会断。拖动平移的监听也挂在 mount 里建的那层（`.tt-box`）：
 // `.tt-scroll` 每次 render 都被换掉，挂上去活不过第一帧。
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -118,7 +118,7 @@ let focusNextRender = false;
  * 32 天装不下也照居中；一条任务都没有 → 回到默认的「今天前 16 天」。
  *
  * 2026-09-20 用户报的：从总览点「逾期 40」进来，窗口却停在上次拖动的位置上，目标全在
- * 屏幕外 —— 和「搜索词留在框里」是同一类「把目标挡在视图外」。
+ * 屏幕外 —— 和「标签筛选留在原处」是同一类「把目标挡在视图外」。
  *
  * ⚠️ 它曾经还带一个「档位段」参数：窗口与档位那段没交集时退回「档位首日 - 2」。
  * 工具行那排档位（全部 / 昨天 / 今天 / 上周 / 本周 / 上月 / 本月）2026-09-21 撤掉之后
@@ -155,8 +155,8 @@ const FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "done", label: STATUS_LABEL.done },
 ];
 
-const SEARCH_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>';
+const CHEVRON_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>';
 
 const WEEKDAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"];
 
@@ -424,9 +424,9 @@ export function openImportDialog(): void {
       })),
     );
     const { skipped } = report();
-    // 导入的这批可能落在当前筛选 / 搜索词之外，先复位，否则切回任务页一条都看不见
+    // 导入的这批可能落在当前筛选 / 标签之外，先复位，否则切回任务页一条都看不见
     statusFilter = "all";
-    query = "";
+    tagFilters = [];
     dataChanged();
     close();
     // 回执：导了几条、落在哪个分区、跳过几行认不出的 —— 一次说清
@@ -492,7 +492,14 @@ let dueTodayOnly = false;
 let page = 0;
 /** 当前每页几条。分页器上那个下拉改它。 */
 let taskPageSize = TASK_PAGE_SIZE;
-let query = "";
+/**
+ * 标签筛选（2026-11-16 替换掉文本搜索框）。
+ *
+ * 可多选，命中**任意一个**选中标签即算符合（并集）——「按标签找任务」时，用户心里的
+ * 模型是「这批任务里有 #工作 或 #学习」，而不是「标签名必须包含这两个字」。
+ * 选中顺序即点选顺序，按钮上直接显示，避免像搜索框那样敲完还得猜自己筛了什么。
+ */
+let tagFilters: string[] = [];
 /**
  * 默认排序：**按优先级**（2026-09-21 用户定的，原来默认「按截止日期」）。
  * 优先级相同时按截止日期排（见 comparators），所以它不会把「今天必须交的 P1」
@@ -510,18 +517,16 @@ let view: TaskView = "gantt";
 // ─── 筛选与排序 ──────────────────────────────────────────────────────────────
 
 /**
- * 除**状态**以外的筛选（优先级 + 搜索）。
+ * 除**状态**以外的筛选（优先级 + 标签）。
  *
  * 单独抽出来是为了 chips 上的数字：那个数必须等于「点这个 chip 之后表里会有几行」，
- * 所以它要带上优先级和搜索词，唯独不带状态本身 —— 否则点「逾期」前后的数字会互相打架。
+ * 所以它要带上优先级和已选标签，唯独不带状态本身 —— 否则点「逾期」前后的数字会互相打架。
  */
 function poolTasks(): Task[] {
-  const needle = query.trim().toLowerCase();
-
   return activeTasks().filter((task) => {
     if (urgencyFilter !== "all" && task.urgency !== urgencyFilter) return false;
-    if (!needle) return true;
-    return [task.title, ...task.tags].join(" ").toLowerCase().includes(needle);
+    if (tagFilters.length === 0) return true;
+    return task.tags.some((tag) => tagFilters.includes(tag));
   });
 }
 
@@ -952,9 +957,9 @@ function openCreateTask(preset?: CreatePreset): void {
       activities: [{ at: nowStamp(), text: "创建任务", kind: "create" }],
     });
 
-    // 新任务可能落在当前筛选 / 搜索词之外，先复位再定位，否则建完就消失
+    // 新任务可能落在当前筛选 / 标签之外，先复位再定位，否则建完就消失
     statusFilter = "all";
-    query = "";
+    tagFilters = [];
     selectedId = id;
     dataChanged();
     close();
@@ -976,7 +981,7 @@ export const onAction = (): void => openCreateTask();
 
 export function mount(host: HTMLElement): void {
   // 视图切换。四个视图共用下面那一整排筛选/计数/排序 —— 它们是「同一批任务的
-  // 四种摆法」，不是四个页面：切换只换下面那块内容，不动搜索词、状态 chip、优先级
+  // 四种摆法」，不是四个页面：切换只换下面那块内容，不动标签筛选、状态 chip、优先级
   // 和页码（日历/看板不看页码，列表与甘特保持一致）。
   const viewSeg = seg(VIEW_OPTIONS, view, (next) => {
     view = next;
@@ -986,13 +991,108 @@ export function mount(host: HTMLElement): void {
     render();
   });
 
-  const search = el("input", { placeholder: "搜索任务名或标签…" });
-  search.value = query;
-  search.addEventListener("input", () => {
-    query = search.value;
-    page = 0;
-    render();
+  // ── 标签筛选（替代原来的文本搜索框）──────────────────────────────────────
+  // 搜索框只认「字」，而标签是一个个整体：用户点 #工作 就是「给我所有带这个标签的」，
+  // 不需要记得先敲 `#`、更不能把「工作」误当成标题关键词。这里做成可多选下拉：
+  // 选中任意一个标签都算命中，菜单保持展开，连点几个就能把一批标签的任务一起看。
+  const tagFilter = el("div", { class: "dd tag-filter" });
+  const tagBtn = el("button", {
+    class: "dd-btn",
+    type: "button",
+    title: "按标签筛选任务（可多选）",
   });
+  const tagMenu = el("div", { class: "menu tag-menu" });
+  tagFilter.append(tagBtn, tagMenu);
+
+  const closeTagMenu = (): void => {
+    tagMenu.classList.remove("open", "up");
+  };
+  const openTagMenu = (): void => {
+    tagMenu.classList.add("open");
+    tagMenu.classList.remove("up");
+    const spaceBelow = window.innerHeight - tagBtn.getBoundingClientRect().bottom;
+    if (
+      spaceBelow < tagMenu.offsetHeight + 8 &&
+      tagBtn.getBoundingClientRect().top > spaceBelow
+    ) {
+      tagMenu.classList.add("up");
+    }
+  };
+  tagBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (tagMenu.classList.contains("open")) closeTagMenu();
+    else openTagMenu();
+  });
+  // 捕获阶段：点下拉外面就收起。用 pointerdown 而不是 click，别的下拉按钮
+  // 自己 stopPropagation 了，冒泡到 document 的 click 收不到。
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!tagFilter.contains(event.target as Node)) closeTagMenu();
+    },
+    true,
+  );
+
+  let tagMenuSig = "";
+  /** 按钮文案与菜单选项跟随数据 / 已选标签更新。签名没变就不重建，免得拖动表格时菜单闪。 */
+  const syncTagFilter = (): void => {
+    const tasks = activeTasks();
+    const counts = new Map<string, number>();
+    for (const task of tasks) {
+      for (const tag of task.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    const tags = tagSuggestions(tasks);
+    const sig = `${tagFilters.join("\u0001")}|${tags
+      .map((tag) => `${tag}:${counts.get(tag) ?? 0}`)
+      .join("|")}`;
+    if (sig === tagMenuSig) return;
+    tagMenuSig = sig;
+
+    tagBtn.classList.toggle("on", tagFilters.length > 0);
+    tagBtn.replaceChildren();
+    tagBtn.append(
+      el("span", {
+        text:
+          tagFilters.length === 0
+            ? "全部标签"
+            : tagFilters.length === 1
+              ? tagFilters[0]
+              : `${tagFilters[0]} +${tagFilters.length - 1}`,
+      }),
+    );
+    if (tagFilters.length > 1) {
+      tagBtn.append(el("span", { class: "tf-n", text: String(tagFilters.length) }));
+    }
+    tagBtn.insertAdjacentHTML("beforeend", CHEVRON_ICON);
+
+    tagMenu.replaceChildren();
+    const clear = el("div", {
+      class: `tag-opt ${tagFilters.length === 0 ? "on" : ""}`,
+    }, [el("span", { text: "全部标签" }), el("span", { class: "tg-n", text: String(tasks.length) })]);
+    clear.addEventListener("click", () => {
+      tagFilters = [];
+      page = 0;
+      closeTagMenu();
+      render();
+    });
+    tagMenu.append(clear);
+
+    for (const tag of tags) {
+      const on = tagFilters.includes(tag);
+      const row = el("div", { class: `tag-opt ${on ? "on" : ""}` }, [
+        el("span", { class: "tg-ck", text: on ? "✓" : "" }),
+        el("span", { class: "tg-name", text: tag }),
+        el("span", { class: "tg-n", text: String(counts.get(tag) ?? 0) }),
+      ]);
+      row.addEventListener("click", () => {
+        tagFilters = on ? tagFilters.filter((item) => item !== tag) : [...tagFilters, tag];
+        page = 0;
+        render();
+      });
+      tagMenu.append(row);
+    }
+    tagMenu.append(el("div", { class: "tag-hint", text: "多选时显示命中任一标签的任务" }));
+  };
 
   // 这里原来是「快速新建」——一个只能填名称和标签的输入框，建出来的任务状态
   // 永远是「待办」、优先级永远是「普通」、没有开始与结束时间，建完必须再开一次
@@ -1128,10 +1228,7 @@ export function mount(host: HTMLElement): void {
     el("div", { class: "tt-page" }, [
       el("div", { class: "tools" }, [
         viewSeg.root,
-        el("span", { class: "searchbox" }, [
-          el("span", { class: "ic", html: SEARCH_ICON }),
-          search,
-        ]),
+        tagFilter,
         chips,
         urgencyPick.root,
         el("span", { class: "grow" }),
@@ -1143,8 +1240,8 @@ export function mount(host: HTMLElement): void {
   );
 
   const render = (): void => {
-    // 输入框里的字可能被别处改过（新建任务会清空 query），搜索框自己不知道
-    if (search.value !== query) search.value = query;
+    // 别处可能清了标签筛选（新建 / 导入 / 跨页跳转），按钮文案要跟着变
+    syncTagFilter();
 
     // 顺序：先筛，再让窗口去迁就筛出来的这批（见 focusAnchor）。
     // 反过来「先定窗口、再拿窗口砍任务」的结果就是总览写 4、这里只画 3。
@@ -1178,7 +1275,7 @@ export function mount(host: HTMLElement): void {
     currentColW = colW;
 
     // ── chips（数量随数据变）──
-    // 数字按 poolTasks 算（含优先级 / 搜索，不含状态），于是「chip 上写几
+    // 数字按 poolTasks 算（含优先级 / 标签，不含状态），于是「chip 上写几
     // 条」＝「点开后表里几行」。以前按 activeTasks 全量算，点进去对不上。
     const pool = poolTasks();
     chips.replaceChildren();
@@ -1335,9 +1432,9 @@ export function mount(host: HTMLElement): void {
             el("div", {
               class: "empty",
               // 这里原来写「…区间内没有任务」—— 那是窗口还在**筛掉行**的年代留在话里的
-              // 后遗症（现在窗口固定 32 天，只画不裁）。空表只可能因为状态筛选或搜索，
+              // 后遗症（现在窗口固定 32 天，只画不裁）。空表只可能因为状态或标签筛选，
               // 所以按这两样说（档位那排同一天撤了）
-              text: "当前筛选下没有任务 —— 可切换状态，或清空搜索",
+              text: "当前筛选下没有任务 —— 可切换状态，或清空标签筛选",
             }),
           ]),
     );
@@ -1404,7 +1501,7 @@ export function mount(host: HTMLElement): void {
 
     const request = consumeTasksRequest();
     // 这次切回页面是否带着「要看某个东西」的意图。四个维度都算一个都不能漏 ——
-    // 漏掉 dueToday 的话，从总览点「今日到期」进来会被当成普通切页：搜索词不复位、
+    // 漏掉 dueToday 的话，从总览点「今日到期」进来会被当成普通切页：标签筛选不复位、
     // 页码不清零，明明写着 1 条却可能一条都看不到
     const jumping =
       request.taskId !== null ||
@@ -1426,12 +1523,11 @@ export function mount(host: HTMLElement): void {
     // 定位某条任务）都把它关掉 —— 否则「上一批是今日到期」这个状态会跟到下一批数据上
     dueTodayOnly = request.dueToday;
 
-    // 从总览跳进来的请求，**一律清掉搜索词**。
-    // 搜索框里留着上一次的字，目标任务可能根本不在结果里 —— 现象就是「总览上写着
-    // 『进行中 2』，点进来只看到 1 条，另一条明明刚建」。以前只有「定位某条任务」
-    // 那条路径清了，点数字卡和点优先级分布这两条漏了。
-    query = "";
-    search.value = "";
+    // 从总览跳进来的请求，**一律清掉标签筛选**。
+    // 上一次选中的标签留着，目标任务可能根本不在结果里 —— 现象就是「总览上写着
+    // 『进行中 2』，点进来只看到 1 条，另一条明明刚建」。以前搜索词漏清过，
+    // 现在换成标签筛选，同一类「目标被上一轮筛选挡在视图外」不能重演。
+    tagFilters = [];
 
     // 换了筛选就回第一页。停在上一次翻到的那一页，「点逾期 38 条」进来看到的是
     // 第 21–38 条那半截 —— 数字没算错，但看着就像对不上。
@@ -1442,7 +1538,7 @@ export function mount(host: HTMLElement): void {
     urgencyPick.setValue(urgencyFilter === "all" ? "all" : (String(urgencyFilter) as UrgencyKey));
 
     // 窗口也重新对准这批（点「逾期 40」进来，窗口却停在上次拖动的位置上，目标全在
-    // 屏幕外 —— 和「搜索词留在框里」是同一类「把目标挡在视图外」，理由一样）
+    // 屏幕外 —— 和「标签筛选留在原处」是同一类「把目标挡在视图外」，理由一样）
     focusNextRender = true;
     render();
     if (request.taskId !== null) scrollToSelected();
