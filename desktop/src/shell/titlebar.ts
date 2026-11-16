@@ -5,6 +5,7 @@
 // data-tauri-drag-region —— 按钮不带该属性，所以点按钮是点击而非拖窗。
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { isTauri } from "@tauri-apps/api/core";
 import { el, need } from "./dom";
 import { HOTKEY_KEYS } from "./hotkey";
 import { resolveTheme, setThemeMode, onThemeChange, type ResolvedTheme } from "./theme";
@@ -21,6 +22,13 @@ import {
 /** 用注册表里的热键常量重建提示，避免和实际注册的加速键漂移。 */
 function renderHotkeyHint(): void {
   const hint = need(".hint");
+  // Ctrl+Shift+Space 是 Tauri 的**全局**热键（shell/hotkey.ts，经 Rust 侧注册），
+  // 只在桌面端存在。Web 版（2do.201573.xyz）根本没有注册它，按了没反应；
+  // 留着「随时唤起」的提示只是骗人 —— Web 上直接不显示。
+  if (!isTauri()) {
+    hint.remove();
+    return;
+  }
   const nodes: Node[] = [];
 
   HOTKEY_KEYS.forEach((key, index) => {

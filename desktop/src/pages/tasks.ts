@@ -980,6 +980,9 @@ export function mount(host: HTMLElement): void {
   // 和页码（日历/看板不看页码，列表与甘特保持一致）。
   const viewSeg = seg(VIEW_OPTIONS, view, (next) => {
     view = next;
+    // seg 是无状态的：高亮由调用方 setValue 驱动。以前只改 view 不回写，
+    // 于是下方已经切成日历/列表，蓝色高亮却永远停在初始的「甘特」上。
+    viewSeg.setValue(next);
     render();
   });
 

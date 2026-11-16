@@ -21,6 +21,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getVersion } from "@tauri-apps/api/app";
+import { isTauri } from "@tauri-apps/api/core";
 import { autostartEnabled, setAutostart } from "./autostart";
 import { TASKS } from "../data/mock";
 import {
@@ -478,7 +479,10 @@ const TOP_GROUPS: SettingGroup[] = [
       // 「窗口置顶」那一行撤了（2026-09-17）：它是标题栏图钉的**第二个入口**，
       // 而图钉就在那儿一键切换 —— 和其他设置项不同，它是「现在就要这个窗口浮
       // 上来」的动作，不是一条需要翻两层菜单去改的偏好
-      { label: "全局热键", value: "Ctrl+Shift+Space" },
+      //
+      // 全局热键只在 Tauri 桌面端注册（Rust 侧持有）。Web 版按了没反应，
+      // 摆一行「全局热键 Ctrl+Shift+Space」只会让人以为坏了 —— 那里不显示。
+      ...(isTauri() ? [{ label: "全局热键", value: "Ctrl+Shift+Space" }] : []),
     ],
   },
 ];
@@ -522,7 +526,11 @@ function aboutIntro(): HTMLElement {
     list([
       "本地存储：单文件 SQLite，无账号、无云端同步",
       "一屏到底：五个页面都撑满窗口，筛选与翻页不必整页滚动",
-      "键盘优先：Ctrl+1–5 切页，Ctrl+Shift+Space 全局唤起",
+      // 全局唤起是桌面端专属（见 shell/hotkey.ts）。Web 版没有这能力，
+      // 照抄这句就是教用户按一个没反应的键 —— 那里只说页面快捷键。
+      isTauri()
+        ? "键盘优先：Ctrl+1–5 切页，Ctrl+Shift+Space 全局唤起"
+        : "键盘优先：Ctrl+1–5 切页",
       "变更留痕：状态、进度、优先级的每一次改动都写进活动时间线",
     ]),
   ]);

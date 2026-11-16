@@ -701,6 +701,15 @@ try {
     (await page.locator("#page-tasks .tools .seg button").count()) === 4,
   );
 
+  // 切换后高亮要跟着走：seg 是无状态控件，以前只改 view 不回写 setValue，
+  // 下方换成日历了蓝色高亮却还钉在「甘特」上 —— 这条回归断言钉住它。
+  const segOn = () =>
+    page.locator("#page-tasks .tools .seg button.on").first().textContent();
+  await page.click(viewSeg("日历"));
+  check("切到日历后高亮也在日历上", (await segOn())?.trim() === "日历", await segOn() ?? "");
+  await page.click(viewSeg("甘特"));
+  check("切回甘特后高亮也在甘特上", (await segOn())?.trim() === "甘特", await segOn() ?? "");
+
   // 日历：按截止日落格，首次打开自动落到有任务的月份（演示数据在 9 月）
   await page.click(viewSeg("日历"));
   await page.waitForSelector("#page-tasks .tv-cal-grid");
@@ -2713,6 +2722,14 @@ try {
     JSON.stringify(bar),
   );
 
+  // Ctrl+Shift+Space 是 Tauri 桌面端的全局热键，Web 版没注册。
+  // 标题栏不该再摆一个按了没反应的「随时唤起」提示。
+  check(
+    "Web 版标题栏不显示无效的全局热键提示",
+    (await page.locator(".titlebar .hint").count()) === 0 &&
+      !(await page.locator(".titlebar").textContent())?.includes("随时唤起"),
+  );
+
   // 设置一页到底（2026-09-17 撤掉页签）：分三页时每页只剩两三行，翻页成本比滚动
   // 高，还得记住「口令在哪一页」。整页从上到下：外观 → 窗口 → 分区 → 关于
   await page.click("#set-btn");
@@ -2778,6 +2795,21 @@ try {
     return { exists: sw !== null, disabled: sw?.classList.contains("disabled") === true };
   });
   check("设置里有「开机自启动」，浏览器里标成不可用", autostart.exists && autostart.disabled, JSON.stringify(autostart));
+
+  // Web 版没有全局热键：设置「启动」组不该摆那一行，「关于」也不该教用户按它
+  const webHotkey = await page.evaluate(() => ({
+    row: [...document.querySelectorAll("#set-body .set-row")].some((r) =>
+      (r.textContent ?? "").includes("全局热键"),
+    ),
+    about: [...document.querySelectorAll("#set-body .about-list li")].some((li) =>
+      (li.textContent ?? "").includes("全局唤起"),
+    ),
+  }));
+  check(
+    "Web 版设置/关于不显示无效的全局热键",
+    !webHotkey.row && !webHotkey.about,
+    JSON.stringify(webHotkey),
+  );
 
   // 窗口置顶只留标题栏图钉一个入口：它是「现在就要这个窗口浮上来」的动作，不是
   // 一条要翻两层菜单去改的偏好 —— 设置里那一行是图钉的第二个入口，撤了
