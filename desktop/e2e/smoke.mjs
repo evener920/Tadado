@@ -730,7 +730,7 @@ try {
   await page.click(viewSeg("列表"));
   await page.waitForSelector("#page-tasks .tv-lr");
   const listRows = await page.locator("#page-tasks .tv-lr").count();
-  check("列表视图：有行且列头齐全", listRows > 0 && (await page.locator("#page-tasks .tv-lh span").count()) === 6, `rows=${listRows}`);
+  check("列表视图：有行且列头齐全", listRows > 0 && (await page.locator("#page-tasks .tv-lh > span").count()) === 6, `rows=${listRows}`);
   await page.locator("#page-tasks .tv-lr").first().click();
   check("列表点行能开任务抽屉", await page.locator("#task-drawer.open").count() > 0);
   await page.keyboard.press("Escape");
@@ -1542,6 +1542,21 @@ try {
     console.log(`  ⚠ 没等到「多标签任务」这一行：${JSON.stringify(why)}`);
   }
   const multi = page.locator(".tt-row", { hasText: "多标签任务" }).first();
+  // 等标签真的落到 DOM 再取值：change(blur) → 草稿 → dataChanged → 重绘是异步链，
+  // 只等行出现仍可能读到上个版本（历史 flaky 两次）。最多等 3 秒，超时也只影响
+  // 这一条断言的呈现，不会像直接 click 那样把整个 suite 打断。
+  try {
+    await page.waitForFunction(
+      () => {
+        const r = [...document.querySelectorAll("#page-tasks .tt-row")].find((x) =>
+          x.textContent?.includes("多标签任务"),
+        );
+        return r && r.querySelectorAll(".lt2 .tag").length === 3;
+      },
+      null,
+      { timeout: 3000 },
+    );
+  } catch { /* 让下面的断言照常报出实际值 */ }
   const rowTags = await multi.locator(".lt2 .tag").allTextContents();
   check(
     "不带 # 的多个标签能入库，最多 3 个",
@@ -3893,6 +3908,70 @@ try {
     JSON.stringify({ version: afterMigrate.version, task: keptTask }),
   );
   check("归位后补上版本号", afterMigrate.version === "1", `version = ${afterMigrate.version}`);
+
+  // ── 视图内就地新建 ─────────────────────────────────────────────────────────
+  // 每个视图都能就地新建，且按点击位置预填：日历=那天截止、列表=今天、看板=那栏状态。
+  // 用 Escape 关掉，不真的创建（避免污染后面用例）。
+  // 前面的存档迁移用例把 localStorage 换过、页面停在别的页，先切回任务页再说。
+  await page.reload();
+  await page.waitForSelector(".rail-btn");
+  await page.locator(".rail-btn").nth(1).click();
+  await page.waitForSelector("#page-tasks .tools .seg button");
+  const dialogDue = async () =>
+    page.locator(".modal-card.wide .dt:has(.dt-time) .dt-date").inputValue();
+  const closeDialog = async () => {
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".modal-card.wide"), null, { timeout: 3000 });
+  };
+
+  // 日历：头部「＋ 新建」预填今天
+  await page.click(viewSeg("日历"));
+  await page.waitForSelector("#page-tasks .tv-cal-head .tv-add");
+  await page.click("#page-tasks .tv-cal-head .tv-add");
+  await page.waitForSelector(".modal-card.wide");
+  const newTodayIso = await page.evaluate(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
+  check("日历头部＋新建：截止预填今天", (await dialogDue()) === newTodayIso, `${await dialogDue()} vs ${newTodayIso}`);
+  await closeDialog();
+
+  // 日历：点某天空格 → 截止预填那天（挑一个有任务 chip 之外的格子）
+  const emptyCell = page.locator("#page-tasks .tv-cal-cell:not(.out)").filter({ hasNot: page.locator(".tv-cal-chip") }).first();
+  const pickedDay = await emptyCell.getAttribute("data-day");
+  await emptyCell.click({ position: { x: 5, y: 30 } });
+  await page.waitForSelector(".modal-card.wide");
+  check("日历点格子新建：截止预填那天", (await dialogDue()) === pickedDay, `${await dialogDue()} vs ${pickedDay}`);
+  await closeDialog();
+
+  // 列表：列头「＋ 新建」
+  await page.click(viewSeg("列表"));
+  await page.waitForSelector("#page-tasks .tv-lh .tv-add");
+  await page.click("#page-tasks .tv-lh .tv-add");
+  await page.waitForSelector(".modal-card.wide");
+  check("列表列头＋新建：打开新建表单", (await page.locator(".modal-card.wide").count()) === 1);
+  await closeDialog();
+
+  // 看板：每栏「＋」按栏预填状态（逾期栏用昨天截止，由系统标逾期）
+  await page.click(viewSeg("看板"));
+  await page.waitForSelector('#page-tasks .tv-bcol[data-status="doing"] .tv-add');
+  await page.click('#page-tasks .tv-bcol[data-status="doing"] .tv-add');
+  await page.waitForSelector(".modal-card.wide");
+  const doingOn = await page.locator(".modal-card.wide .chips .chip.on").first().textContent();
+  check("看板进行中栏＋新建：状态预填进行中", doingOn?.includes("进行中") ?? false, doingOn ?? "");
+  await closeDialog();
+
+  await page.click('#page-tasks .tv-bcol[data-status="overdue"] .tv-add');
+  await page.waitForSelector(".modal-card.wide");
+  const newYesterdayIso = await page.evaluate(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
+  check("看板逾期栏＋新建：截止预填昨天（系统据此标逾期）", (await dialogDue()) === newYesterdayIso, `${await dialogDue()} vs ${newYesterdayIso}`);
+  await closeDialog();
+
+  await page.click(viewSeg("甘特"));
 
   // 存档彻底坏掉：不能当空库处理（那等于拿演示数据把用户的存档盖掉），
   // 要原样留着 + 给一句人话提示

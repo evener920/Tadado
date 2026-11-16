@@ -12,6 +12,22 @@
   min-height: 0;
 }
 
+/* 就地新建：三个视图共用的小按钮，克制到只在悬停时提亮 */
+.tv-add {
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.4;
+  flex: none;
+  color: var(--text-2);
+  border-color: var(--border-2, var(--border));
+  background: var(--surface);
+}
+.tv-add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft, var(--hover));
+}
+
 .tv-dot {
   display: inline-block;
   width: 8px;
@@ -82,6 +98,10 @@
   gap: 3px;
   min-width: 0;
   overflow: hidden;
+  cursor: pointer;
+}
+.tv-cal-cell:hover {
+  background: var(--hover);
 }
 .tv-cal-cell.out {
   background: var(--bg-2);

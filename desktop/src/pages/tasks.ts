@@ -22,7 +22,8 @@ import { parseTasksDetailed, type ParseReport } from "../data/markdown";
 import { TASKS, activeTasks } from "../data/mock";
 import { PARTITIONS, activePartitionId } from "../data/partitions";
 import { dataChanged, onDataChange } from "../data/store";
-import { INBOX_TAG } from "../data/tags";
+import { INBOX_TAG, normalizeTags } from "../data/tags";
+import { dueTextOf, monthDayOf } from "../data/time";
 import type { Task, Urgency } from "../data/types";
 import { el } from "../shell/dom";
 import { dropdown } from "../shell/menu";
@@ -39,6 +40,7 @@ import {
   renderBoard,
   renderCalendar,
   renderList,
+  type CreatePreset,
   type TaskView,
 } from "./taskViews";
 import {
@@ -851,10 +853,22 @@ function scrollToSelected(): void {
  *
  * 提交时才入库：填一半就关掉，不该在列表里留下一条没名字的任务。
  */
-function openCreateTask(): void {
+function openCreateTask(preset?: CreatePreset): void {
   const draft = draftTask();
   // 建在当前分区下 —— 切了分区再建，它出现在别的分区里会像凭空消失
   draft.partition = activePartitionId();
+
+  // 视图内的就地新建带上下文：日历点那天 → 截止/开始都是那天；看板某栏 → 落那栏。
+  // only 填得起的字段才填（overdue 由系统按截止日标，不手动写）。
+  if (preset?.day !== undefined) {
+    draft.end = monthDayOf(preset.day);
+    draft.start = monthDayOf(preset.day);
+    draft.due = dueTextOf(preset.day, draft.at);
+  }
+  if (preset?.status !== undefined) {
+    draft.status = preset.status;
+    if (preset.status === "done") draft.progress = 100;
+  }
 
   const form = taskForm({
     task: draft,
@@ -895,6 +909,16 @@ function openCreateTask(): void {
   });
 
   createBtn.addEventListener("click", () => {
+    // 提交这一刻从输入框**现读**标题与标签：这两个框只在 change（blur）时回写草稿，
+    // 而「填完直接点创建」时创建按钮抢走了焦点，change 可能还没落 —— 上一版只看
+    // draft，于是刚填的多标签被当成空、兜底成 #收件箱（e2e 偶发挂在这里）。
+    const titleInput = form.root.querySelector<HTMLInputElement>(".dr-title");
+    const tagsInput = form.root.querySelector<HTMLInputElement>(".dr-tags");
+    if (titleInput) draft.title = titleInput.value;
+    if (tagsInput) {
+      const { tags: parsed } = normalizeTags(tagsInput.value);
+      draft.tags = parsed;
+    }
     const title = draft.title.trim();
 
     // 必填两项：任务名 / 结束时间。标签不再是必填 —— 没写就归到 `#收件箱`
@@ -915,8 +939,7 @@ function openCreateTask(): void {
     }
     if (draft.tags.length === 0) {
       draft.tags = [INBOX_TAG];
-      const input = form.root.querySelector<HTMLInputElement>(".dr-tags");
-      if (input) input.value = INBOX_TAG;
+      if (tagsInput) tagsInput.value = INBOX_TAG;
     }
 
     const id = `task-${Date.now()}`;
@@ -1203,10 +1226,10 @@ export function mount(host: HTMLElement): void {
     if (view !== "gantt") {
       const body =
         view === "calendar"
-          ? renderCalendar(matched, render)
+          ? renderCalendar(matched, render, openCreateTask)
           : view === "list"
-            ? renderList(rows)
-            : renderBoard(matched);
+            ? renderList(rows, openCreateTask)
+            : renderBoard(matched, openCreateTask);
       const nodes: HTMLElement[] = [el("div", { class: "tv-scroll" }, [body])];
       if (view === "list") {
         nodes.push(

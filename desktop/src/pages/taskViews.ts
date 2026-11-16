@@ -32,6 +32,19 @@ import { openTask } from "./taskDrawer";
 /** 任务页的四个视图。gantt 留在 tasks.ts 里（拖动窗口那套逻辑跟它绑得太紧）。 */
 export type TaskView = "gantt" | "calendar" | "list" | "board";
 
+/**
+ * 视图内就地新建的预填条件。
+ *
+ * 只传「能从点击位置推定、且不违背模型」的字段：
+ *  · `day` —— 日历点哪天，截止日就是那天；看板逾期栏点＋，截止日给昨天（系统据此标逾期）。
+ *  · `status` —— 看板进行中/已完成栏点＋，状态直接落那栏。`overdue` 不传：它由系统标，
+ *    手动写进去下一次 refresh 就会被改回 doing（除非截止日真在过去）。
+ */
+export interface CreatePreset {
+  day?: number;
+  status?: TaskStatus;
+}
+
 export const VIEW_OPTIONS: { value: TaskView; label: string }[] = [
   { value: "gantt", label: "甘特" },
   { value: "calendar", label: "日历" },
@@ -77,7 +90,11 @@ let calFirstRender = true;
  * 日历视图。按**截止日**把任务落到格子里；没有截止日的任务不摆进格子
  * （「摆进哪天」没有依据），在头部单独报个数，免得看起来像任务丢了。
  */
-export function renderCalendar(tasks: Task[], rerender: () => void): HTMLElement {
+export function renderCalendar(
+  tasks: Task[],
+  rerender: () => void,
+  onCreate: (preset: CreatePreset) => void,
+): HTMLElement {
   const first = new Date(calMonth * DAY_MS);
   const year = first.getUTCFullYear();
   const month = first.getUTCMonth();
@@ -117,6 +134,8 @@ export function renderCalendar(tasks: Task[], rerender: () => void): HTMLElement
   const prev = el("button", { class: "navbtn", type: "button", text: "‹", title: "上个月" });
   const next = el("button", { class: "navbtn", type: "button", text: "›", title: "下个月" });
   const today = el("button", { class: "btn sm", type: "button", text: "今天" });
+  // 就地新建：头部这枚用「今天」，格子上的＋用那一天（见下面 cell）。两条路都开同一张表单。
+  const add = el("button", { class: "btn sm tv-add", type: "button", text: "＋ 新建", title: "新建任务（截止日默认今天）" });
   prev.addEventListener("click", () => shift(-1));
   next.addEventListener("click", () => shift(1));
   today.addEventListener("click", () => {
@@ -124,11 +143,13 @@ export function renderCalendar(tasks: Task[], rerender: () => void): HTMLElement
     calMonth = Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / DAY_MS);
     rerender();
   });
+  add.addEventListener("click", () => onCreate({ day: TODAY }));
   head.append(
     prev,
     title,
     next,
     today,
+    add,
     el("span", { class: "grow" }),
     el("span", {
       class: "dim mono",
@@ -150,7 +171,10 @@ export function renderCalendar(tasks: Task[], rerender: () => void): HTMLElement
     const cell = el("div", {
       class: `tv-cal-cell${inMonth ? "" : " out"}${day === TODAY ? " today" : ""}`,
       "data-day": isoDay(day),
+      // 点格子空白处 = 在那天新建；已有任务的 chip 会 stopPropagation，仍是打开抽屉
+      title: `点空白处新建任务（截止日 ${isoDay(day)}）`,
     });
+    cell.addEventListener("click", () => onCreate({ day }));
     cell.append(
       el("span", {
         class: "tv-cal-dn",
@@ -164,7 +188,10 @@ export function renderCalendar(tasks: Task[], rerender: () => void): HTMLElement
         statusDot(task.status),
         el("span", { class: "tv-cal-ct", text: task.title }),
       ]);
-      chip.addEventListener("click", () => openTask(task.id));
+      chip.addEventListener("click", (event) => {
+        event.stopPropagation(); // 别让「点任务」冒泡成「点格子新建」
+        openTask(task.id);
+      });
       cell.append(chip);
     }
     if (list.length > 3) {
@@ -188,11 +215,18 @@ export function renderCalendar(tasks: Task[], rerender: () => void): HTMLElement
  * 紧凑列表：一屏看更多条，列按「状态 / 优先级 / 截止 / 进度 / 分区」固定。
  * 和甘特共用分页（rows 由调用方切好传进来）。
  */
-export function renderList(rows: Task[]): HTMLElement {
+export function renderList(rows: Task[], onCreate: (preset: CreatePreset) => void): HTMLElement {
   const wrap = el("div", { class: "tv-list" });
+  const add = el("button", {
+    class: "btn sm tv-add",
+    type: "button",
+    text: "＋ 新建",
+    title: "新建任务",
+  });
+  add.addEventListener("click", () => onCreate({}));
   wrap.append(
     el("div", { class: "tv-lh" }, [
-      el("span", { text: "任务" }),
+      el("span", {}, [el("span", { text: "任务" }), add]),
       el("span", { text: "状态" }),
       el("span", { text: "优先级" }),
       el("span", { text: "截止" }),
@@ -239,17 +273,34 @@ const BOARD_COLUMNS: { status: TaskStatus; hint: string }[] = [
  * done → doing）—— 走 `setTaskStatus` 而不是直接改字段，活动记录会留下这一笔。
  * 流转后 `dataChanged()` 广播，tasks.ts 的 onDataChange 会重绘，这里不用自己刷。
  */
-export function renderBoard(tasks: Task[]): HTMLElement {
+export function renderBoard(
+  tasks: Task[],
+  onCreate: (preset: CreatePreset) => void,
+): HTMLElement {
   const board = el("div", { class: "tv-board" });
   for (const column of BOARD_COLUMNS) {
     const list = tasks.filter((task) => task.status === column.status);
     const col = el("div", { class: "tv-bcol", "data-status": column.status });
+    // 逾期栏不预填 status：系统下次刷新会按截止日重算。给它预填「昨天」截止，
+    // 新任务自然落进这一栏；done 栏预填 done（若分区设了完成即归档，新建后会立刻归档）。
+    const preset: CreatePreset =
+      column.status === "overdue"
+        ? { day: TODAY - 1 }
+        : { status: column.status };
+    const add = el("button", {
+      class: "btn sm tv-add",
+      type: "button",
+      text: "＋",
+      title: `在「${STATUS_LABEL[column.status]}」新建任务`,
+    });
+    add.addEventListener("click", () => onCreate(preset));
     const head = el("div", { class: "tv-bhead" }, [
       statusDot(column.status),
       el("span", { class: "tv-bname", text: STATUS_LABEL[column.status] }),
       el("span", { class: "mono dim", text: String(list.length) }),
       el("span", { class: "grow" }),
       el("span", { class: "dim tv-bhint", text: column.hint }),
+      add,
     ]);
     head.style.setProperty("--col", statusVar(column.status));
     col.append(head);
