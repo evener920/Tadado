@@ -668,6 +668,8 @@
      写死 22px 时数据跨度小，右边会留一大片空白列。 */
   width: var(--tt-col, 22px);
   flex: none;
+  position: relative;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -676,6 +678,24 @@
   font: 400 9px var(--mono);
   color: var(--text-3);
   border-right: 1px solid var(--border);
+}
+
+/* 表头日期格 = 在那天新建（含未来）。悬停才露出的小 ＋：不平时占位置，
+   但指针过去就知道这一格能点，不必读那行 title */
+.tt-date::after {
+  content: "+";
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font: 500 11px var(--mono);
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.tt-date:hover::after {
+  opacity: 0.85;
 }
 
 .tt-date .dn {

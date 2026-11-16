@@ -4100,6 +4100,28 @@ try {
     await page.waitForFunction(() => !document.querySelector(".modal-card.wide"), null, { timeout: 3000 });
   };
 
+  // 甘特：点表头日期格就地新建（含未来日期）——原来只有日历支持，
+  // 甘特表头只是坐标，想排到未来得先建一条今天的再去改截止日
+  await page.click(rangeBtn("周"));
+  await page.waitForSelector("#page-tasks .tt-date");
+  await sleep(250);
+  const futureCell = page.locator("#page-tasks .tt-date").last();
+  const futureDay = Number(await futureCell.getAttribute("data-day"));
+  await futureCell.click();
+  await page.waitForSelector(".modal-card.wide");
+  const futureIso = await page.evaluate((d) => {
+    const date = new Date(d * 86400000);
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  }, futureDay);
+  check(
+    "甘特点未来日期格新建：截止预填那天",
+    (await dialogDue()) === futureIso,
+    `${await dialogDue()} vs ${futureIso}`,
+  );
+  await closeDialog();
+  await page.click(rangeBtn("月"));
+  await sleep(250);
+
   // 日历：头部「＋ 新建」预填今天
   await page.click(viewSeg("日历"));
   await page.waitForSelector("#page-tasks .tv-cal-head .tv-add");

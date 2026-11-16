@@ -1432,6 +1432,7 @@ export function mount(host: HTMLElement): void {
           // data-day：这一格是哪一天（绝对天数）。表头只写「几号」，跨月就分不出是哪个月，
           // 而拖动/窗口这类断言需要精确比天数
           "data-day": String(day),
+          title: `点这一格新建任务（截止日 ${monthDayText(day)}）`,
           class: `tt-date ${weekday === 0 || weekday === 6 ? "wknd" : ""} ${
             day === TODAY ? "today" : ""
           } ${isMonthStart ? "mo-start" : ""}`,
@@ -1446,6 +1447,10 @@ export function mount(host: HTMLElement): void {
           }),
         ],
       );
+      // 表头那一格就是「在这一天新建」的入口，和日历点格子同一套语义（截止/开始
+      // 都预填那天）。未来的日期不用先建一条今天的再改截止日，点一下就落在那天。
+      // 拖动平移的余波会被 mount 里 table 上的捕获阶段拦掉，不会误开表单。
+      cell.addEventListener("click", () => openCreateTask({ day }));
       dayCells.push(cell);
     }
 
