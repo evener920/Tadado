@@ -22,7 +22,7 @@ import { parseTasksDetailed, type ParseReport } from "../data/markdown";
 import { TASKS, activeTasks } from "../data/mock";
 import { PARTITIONS, activePartitionId } from "../data/partitions";
 import { dataChanged, onDataChange } from "../data/store";
-import { INBOX_TAG, normalizeTags } from "../data/tags";
+import { INBOX_TAG, normalizeTags, tagSuggestions } from "../data/tags";
 import { dueTextOf, monthDayOf } from "../data/time";
 import type { Task, Urgency } from "../data/types";
 import { el } from "../shell/dom";
@@ -874,6 +874,8 @@ function openCreateTask(preset?: CreatePreset): void {
     task: draft,
     // 对话框里每次改动都不落库：草稿还没进 TASKS，提交时才写
     onEdit: () => {},
+    // 标签备选取当前所有任务里出现过的 + 收件箱 + 预置，点选即填
+    suggestions: tagSuggestions(TASKS),
   });
 
   const cancelBtn = el("button", { class: "btn", type: "button", text: "取消" });

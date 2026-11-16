@@ -33,6 +33,11 @@ export interface TaskFormOptions {
   /** 抽屉里给状态变更额外提示用；对话框里不需要。 */
   onStatusChange?: (next: TaskStatus) => void;
   /**
+   * 标签备选（见 data/tags 的 tagSuggestions）。点一下就加上/去掉，不必每次手敲。
+   * 不传则只把当前任务已有的标签当备选。
+   */
+  suggestions?: string[];
+  /**
    * 要不要带上「进度」这一行，默认带。
    *
    * 抽屉传 `false`：进度控件已经搬到**活动时间线**里（见 taskDrawer 的 .tl-prog）——
@@ -263,6 +268,41 @@ export function taskForm(options: TaskFormOptions): TaskForm {
     else toast(`标签已改为 ${next.join(" ")}`);
   });
 
+  // ── 标签备选 ──
+  // 「提供标签备选，不要每次都输入」（2026-11-16 用户批注）：输入框下面一排可点
+  // 胶囊，来自 tagSuggestions（收件箱 + 预置 + 数据里出现过的）。点一下切换选中，
+  // 和上面的输入框双向同步 —— 输入框仍可手敲新标签，备选只是省掉重复输入。
+  const tagPicks = el("div", { class: "chips tf-tagpicks" });
+  const pickButtons: { tag: string; button: HTMLButtonElement }[] = [];
+  const seenPick = new Set<string>();
+  for (const tag of [...(options.suggestions ?? []), ...task.tags]) {
+    if (seenPick.has(tag)) continue;
+    seenPick.add(tag);
+    const button = el("button", {
+      class: "chip tag-pick",
+      type: "button",
+      text: tag,
+      title: `点选 ${tag}`,
+    });
+    button.addEventListener("click", () => {
+      const on = task.tags.includes(tag);
+      let next = on ? task.tags.filter((t) => t !== tag) : [...task.tags, tag];
+      if (!on && next.length > MAX_TAGS) {
+        toast(`最多 ${MAX_TAGS} 个标签，先去掉一个`);
+        return;
+      }
+      // 和手输口径一致：全去掉 = 归收件箱
+      if (next.length === 0) next = [INBOX_TAG];
+      task.tags = next;
+      tags.value = next.join(" ");
+      paint(task);
+      options.onEdit("tags");
+      toast(`标签已改为 ${next.join(" ")}`);
+    });
+    tagPicks.append(button);
+    pickButtons.push({ tag, button });
+  }
+
   // ── 开始 / 结束 ──
   // 开始只到日期（它决定甘特条的起点）；结束带时分（它才是要提醒的那个点）。
   // 两个字段用同一个组件、同一套排布，所以这两行在抽屉里是齐的。
@@ -364,6 +404,7 @@ export function taskForm(options: TaskFormOptions): TaskForm {
   const root = el("div", { class: "tform" }, [
     el("div", { class: "tf-row" }, [el("span", { class: "tf-k", text: "任务" }), title]),
     el("div", { class: "tf-row" }, [el("span", { class: "tf-k", text: "标签" }), tags]),
+    el("div", { class: "tf-row tf-tagrow" }, [el("span", { class: "tf-k" }), tagPicks]),
     startField.root,
     endField.root,
     el("div", { class: "tf-row" }, [el("span", { class: "tf-k", text: "状态" }), statusRow, overdueNote]),
@@ -379,6 +420,7 @@ export function taskForm(options: TaskFormOptions): TaskForm {
     // 带着重画一遍，用户敲到一半的字就没了
     if (document.activeElement !== title) title.value = task.title;
     if (document.activeElement !== tags) tags.value = task.tags.join(" ");
+    for (const { tag, button } of pickButtons) button.classList.toggle("on", task.tags.includes(tag));
 
     startField.setValue({ day: dayNumber(task.start), time: null });
     endField.setValue({ day: task.due ? dayNumber(task.end) : null, time: task.at });

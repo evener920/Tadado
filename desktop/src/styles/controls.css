@@ -171,6 +171,17 @@
   opacity: 0.85;
 }
 
+/* 表单标签备选：贴着输入框下面那一行，胶囊比筛选栏的略小、字号更轻，
+   省得备选区比输入框本身还抢眼。选中态沿用 .chip.on。 */
+.tf-tagrow {
+  margin-top: -2px;
+}
+
+.tag-pick {
+  padding: 2px 9px;
+  font-size: 11px;
+}
+
 
 
 /* ============ 优先级徽标（pages/shared.ts 的 urgencyBadge）============ */

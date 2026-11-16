@@ -81,3 +81,21 @@ export function tagsInUse(tasks: Task[]): string[] {
   const rest = [...present].filter((tag) => !SEED_TAGS.includes(tag)).sort();
   return [...known, ...rest];
 }
+
+/**
+ * 表单里的**标签备选**：预置标签 + 收件箱 + 数据里出现过的其它标签。
+ *
+ * 和 tagsInUse 的区别：图谱只显示「图上真实存在的标签」，所以只看数据里有没有；
+ * 表单是**入口**，即使某个预置标签现在没有任何任务用它，也得能点选，否则用户想
+ * 给第一条任务打 `#工作` 还得先手敲一遍 —— 那正是「提供标签备选」要省掉的麻烦。
+ *
+ * 顺序：收件箱排最前（它是默认归宿，最常被选），然后预置顺序，最后新标签按字面。
+ */
+export function tagSuggestions(tasks: Task[]): string[] {
+  const used = tagsInUse(tasks);
+  const out: string[] = [INBOX_TAG];
+  for (const tag of used) if (!out.includes(tag)) out.push(tag);
+  // 数据里尚未出现的预置标签也要在（表单是入口，不是现状展示）
+  for (const tag of SEED_TAGS) if (!out.includes(tag)) out.push(tag);
+  return out;
+}

@@ -973,6 +973,11 @@ try {
   await page.locator(".tt-row").first().dblclick();
   await sleep(400);
   check("双击打开维护抽屉", (await page.locator("#task-drawer.open").count()) === 1);
+  // 抽屉和新建共用同一份表单：标签备选在抽屉里也要出现（只查渲染，不点击避免改数据）
+  check(
+    "抽屉里也有标签备选（与新建共用表单）",
+    (await page.locator("#task-drawer.open .tf-tagpicks .tag-pick").count()) >= 3,
+  );
   await page.keyboard.press("Escape");
   await sleep(300);
   check("Esc 关闭抽屉", (await page.locator("#task-drawer.open").count()) === 0);
@@ -3972,6 +3977,39 @@ try {
   await closeDialog();
 
   await page.click(viewSeg("甘特"));
+
+  // ── 标签备选 ───────────────────────────────────────────────────────────────
+  // 「提供标签备选，不要每次都输入」：标签框下面一排可点胶囊，点与输入框双向同步。
+  // 只开对话框点选、用 Escape 关掉，不创建任务（避免污染后面的用例）。
+  await page.click('#page-tasks .ph button:has-text("＋ 新建任务")');
+  await page.waitForSelector(".modal-card.wide .tf-tagpicks .tag-pick");
+  const picks = page.locator(".modal-card.wide .tf-tagpicks .tag-pick");
+  check("标签备选：输入框下方有一排可点标签", (await picks.count()) >= 3, `count=${await picks.count()}`);
+  const inboxPick = picks.filter({ hasText: "#收件箱" }).first();
+  const workPick = picks.filter({ hasText: "#工作" }).first();
+  const tagsInput = page.locator(".modal-card.wide .dr-tags");
+  await inboxPick.click();
+  check(
+    "点备选标签：写入输入框且胶囊点亮",
+    (await tagsInput.inputValue()).includes("#收件箱") &&
+      (await inboxPick.evaluate((b) => b.classList.contains("on"))),
+    await tagsInput.inputValue(),
+  );
+  await workPick.click();
+  check(
+    "再点另一个：可叠加最多 3 个",
+    (await tagsInput.inputValue()).includes("#工作") &&
+      (await tagsInput.inputValue()).includes("#收件箱"),
+    await tagsInput.inputValue(),
+  );
+  await workPick.click();
+  check(
+    "再点一次同一个：从输入框移除",
+    !(await tagsInput.inputValue()).includes("#工作") &&
+      (await tagsInput.inputValue()).includes("#收件箱"),
+    await tagsInput.inputValue(),
+  );
+  await closeDialog();
 
   // 存档彻底坏掉：不能当空库处理（那等于拿演示数据把用户的存档盖掉），
   // 要原样留着 + 给一句人话提示

@@ -25,8 +25,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { parseTasks, taskToMarkdown } from "../data/markdown";
-import { byId } from "../data/mock";
+import { TASKS, byId } from "../data/mock";
 import { dataChanged, onDataChange } from "../data/store";
+import { tagSuggestions } from "../data/tags";
 import type { Activity, Task, TaskStatus } from "../data/types";
 import { el } from "../shell/dom";
 import { panelClosed, panelOpened, registerPanel } from "../shell/panels";
@@ -421,6 +422,7 @@ function build(task: Task): Drawer {
   // 两处各写一份的话，新建时能填的东西编辑时未必有，列表与编辑界面就会对不上
   const form = taskForm({
     task,
+    suggestions: tagSuggestions(TASKS),
     // 进度不在这一区了：它搬到了下面的活动时间线（见 .tl-prog）
     withProgress: false,
     onEdit: () => dataChanged(),
