@@ -73,6 +73,7 @@ function adoptSeedPartitions(tasks: Task[]): number {
 }
 
 const KEY_ARCHIVE = "archive.afterDays";
+const KEY_SEEDED = "store.seeded";
 
 /**
  * 完成后多久收进归档（**按分区**设）：
@@ -169,10 +170,15 @@ export async function bootStore(): Promise<void> {
 
   const saved = result.tasks;
   /** 库本来就有数据（= 老用户），不是这次刚种进去的 —— 归档默认值要用到（见下面那段）。 */
-  const existing = Boolean(saved && saved.length > 0);
-  if (existing && saved) {
+  // 「老用户」看两处：库里有任务，或者打过「种子已播」的标记。标记的存在意味着
+  // **空存档是用户自己清空的，不是还没开始用** —— 绝不能再拿种子盖回去。没这条，
+  // 把演示空间连同 100 条种子任务删干净的人，刷新一下就会被原样灌回来。
+  const seeded = (await loadSetting<boolean>(KEY_SEEDED)) === true;
+  const existing = Boolean(saved && saved.length > 0) || seeded;
+  if (existing) {
+    if (!seeded) void saveSetting(KEY_SEEDED, true);
     TASKS.length = 0;
-    TASKS.push(...saved);
+    if (saved) TASKS.push(...saved);
 
     // 压测模式（STRESS_EXTRA > 0）下让**种子说了算**：
     //   · 缺的补进来（改完 STRESS_EXTRA 就多出几十条）
@@ -190,7 +196,10 @@ export async function bootStore(): Promise<void> {
       saveTasks(TASKS);
     }
   } else {
+    // 首次启动：把种子写进去，**同时立标记** —— 之后哪怕任务被删到 0 条，
+    // 重启也不再重播（见上面 existing 的判定）。
     saveTasks(TASKS);
+    void saveSetting(KEY_SEEDED, true);
   }
 
   // 结构层面的修补（缺字段、旧展示串时刻、非法枚举）已经在读入口做完了

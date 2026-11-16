@@ -37,6 +37,7 @@ import {
   ARCHIVE_NEVER,
   ARCHIVE_NOW,
   archiveAfterDays,
+  dataChanged,
   onDataChange,
   setArchiveDays,
 } from "../data/store";
@@ -220,26 +221,36 @@ function archiveControl(partition: Partition): HTMLElement {
 }
 
 /**
- * 删分区。**里面有任务就不让删**。
+ * 删分区。里面有任务时**连任务一起删**，但要在确认框里把后果说清楚。
  *
- * 不做「自动迁到别的分区」：迁去哪儿用户没得选，等于替他决定一批任务的归属，而
- * 这边只是想删个空分区。真要留着那些任务，他自己先移走更清楚 —— 所以按钮直接
- * 置灰，写明还剩几条。
+ * 不做「自动迁到别的分区」：迁去哪儿用户没得选，等于替他决定一批任务的归属。
+ * 以前的做法是「有任务就置灰不让删」，可演示空间天生带着 100 条种子任务，
+ * 这条规则等于把它焊死在列表里 —— 所以改成确认即删，代价明明白白摆在框里。
  */
 async function dropPartition(partition: Partition): Promise<void> {
   const mine = TASKS.filter((task) => task.partition === partition.id).length;
-  if (mine > 0) {
-    toast(`「${partition.name}」里还有 ${mine} 条任务，先移走再删`);
-    return;
-  }
-
-  const ok = await confirmAction({ title: `删除分区「${partition.name}」？`, confirmText: "删除" });
+  const ok = await confirmAction(
+    mine > 0
+      ? {
+          title: `删除分区「${partition.name}」？`,
+          detail: `里面还有 ${mine} 条任务，将一并删除，删除后无法恢复。`,
+          confirmText: `删除分区和 ${mine} 条任务`,
+        }
+      : { title: `删除分区「${partition.name}」？`, confirmText: "删除" },
+  );
   if (!ok) return;
+
+  // 按 partition 从真数组里倒着删（和 manage 页的批量删除同一套路），
+  // dataChanged() 负责落盘 + 广播（云同步也会跟着推一版新快照）。
+  for (let index = TASKS.length - 1; index >= 0; index -= 1) {
+    if (TASKS[index].partition === partition.id) TASKS.splice(index, 1);
+  }
   if (!removePartition(partition.id)) {
     toast("至少留一个分区");
     return;
   }
-  toast(`已删除分区「${partition.name}」`);
+  dataChanged();
+  toast(`已删除分区「${partition.name}」${mine > 0 ? `（连同 ${mine} 条任务）` : ""}`);
 }
 
 /**
@@ -305,9 +316,11 @@ function partitionSection(): HTMLElement {
       pass.title = locked ? "改 / 清除这个分区的口令" : "给这个分区设口令";
 
       const mine = TASKS.filter((task) => task.partition === partition.id).length;
-      del.disabled = mine > 0;
-      del.title = mine > 0 ? `里面还有 ${mine} 条任务，先移走再删` : "删除这个分区";
-      del.style.opacity = mine > 0 ? "0.45" : "";
+      // 有任务也能删了（确认框里连任务一起删），按钮不再置灰 —— 演示空间天生
+      // 带 100 条种子任务，置灰等于焊死。数量写进提示，删之前看得见代价。
+      del.disabled = false;
+      del.title = mine > 0 ? `删除这个分区（连同里面 ${mine} 条任务）` : "删除这个分区";
+      del.style.opacity = "";
 
       const isDefault = defaultPartitionId() === partition.id;
       dot.classList.toggle("on", isDefault);

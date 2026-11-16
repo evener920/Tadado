@@ -5,7 +5,10 @@ import { onDataChange } from "./store";
 import type { Task } from "./types";
 
 const STATE_KEY="sync.state.v1";
-type State={version:number;tasks:Record<string,{hash:string;at:number}>};
+// partitions：上次成功同步时见过的分区 id 列表。作用是记住「本地删过谁」——
+// 同步没有删除语义（快照只有「有/没有」），不记这一笔的话，本地刚删掉的分区
+// 会在下一次 pull 时被当成云端的新数据原样合回来（演示空间就是这么复活的）。
+type State={version:number;tasks:Record<string,{hash:string;at:number}>;partitions?:string[]};
 let running=false,suppress=false;
 let state:State={version:0,tasks:{}};
 
@@ -32,7 +35,7 @@ export async function syncNow(){
       const cloud=await get.json() as {version:number;data:{tasks:Task[];partitions:any[];defaultPartitionId?:string}|null};
       if(!cloud.data){
         const put=await push(0);
-        if(put.ok){const x=await put.json();state={version:x.version,tasks:Object.fromEntries(TASKS.map(t=>[t.id,{hash:taskHash(t),at:Date.now()}]))};await saveState();}
+        if(put.ok){const x=await put.json();state={version:x.version,tasks:Object.fromEntries(TASKS.map(t=>[t.id,{hash:taskHash(t),at:Date.now()}])),partitions:PARTITIONS.map(p=>p.id)};await saveState();}
         return;
       }
 
@@ -40,11 +43,17 @@ export async function syncNow(){
       // 否则采用云端版本。两边新增的任务都会保留。
       const local=taskMap(TASKS),remote=taskMap(cloud.data.tasks||[]),merged:Task[]=[];
       const firstSync = state.version === 0;
+      // 本地上次同步后删掉的任务：id 在 state.tasks 里、现在却不在 TASKS 里。
+      // 这类 id 绝不能从云端拉回来 —— 否则删除永远不生效（一同步就复活）。
+      const locallyDeleted=new Set(Object.keys(state.tasks).filter(id=>!local[id]));
       const ids=new Set([...Object.keys(local),...Object.keys(remote)]);
       for(const id of ids){
         const l=local[id],r=remote[id];
         if(l&&!r){merged.push(l);continue}
-        if(!l&&r){merged.push(r);continue}
+        if(!l&&r){
+          if(locallyDeleted.has(id))continue;
+          merged.push(r);continue
+        }
         if(l&&r){
           // 第一次在新设备登录时，云端同 id 的记录优先，避免把云端已有任务
           // 被本机刚生成的演示数据覆盖。之后才按「自上次同步以来是否修改」判断。
@@ -56,7 +65,12 @@ export async function syncNow(){
 
       suppress=true;
       TASKS.length=0;TASKS.push(...merged);
-      if(Array.isArray(cloud.data.partitions))mergeSyncedPartitions(cloud.data.partitions);
+      // 分区合并同理：上次同步见过的、现在本地没有的分区 = 本地删掉的，
+      // 不从云端合回来；云端真正新增的分区照常收进来。
+      const seen=state.partitions?new Set(state.partitions):null;
+      if(Array.isArray(cloud.data.partitions)){
+        mergeSyncedPartitions(seen?cloud.data.partitions.filter(p=>!p||!seen.has(p.id)):cloud.data.partitions);
+      }
       saveTasks(TASKS);
       suppress=false;
 
@@ -64,7 +78,7 @@ export async function syncNow(){
       if(put.status===409)continue;
       if(!put.ok)return;
       const x=await put.json();
-      state={version:x.version,tasks:Object.fromEntries(TASKS.map(t=>[t.id,{hash:taskHash(t),at:Date.now()}]))};
+      state={version:x.version,tasks:Object.fromEntries(TASKS.map(t=>[t.id,{hash:taskHash(t),at:Date.now()}])),partitions:PARTITIONS.map(p=>p.id)};
       await saveState();
       return;
     }

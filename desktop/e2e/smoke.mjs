@@ -2699,8 +2699,9 @@ try {
   }));
   check("新建分区后切换器里也有它", added.panel && added.menu, JSON.stringify(added));
 
-  // 有任务的分区不给删：删了那批任务就跟着没了，而往哪儿迁用户没得选 —— 所以
-  // 按钮直接置灰并写明还剩几条。
+  // 有任务的分区也能删了：按钮不再置灰，title 写明会连任务一起删（确认框里
+  // 再确认一次）。以前「有任务就置灰」，可演示空间天生带 100 条种子任务，
+  // 那条规则等于把它焊死在列表里 —— 2026-11-16 改成确认即删。
   // 挑「演示空间」：演示数据现在只有这一个分区有，另外三个是空的（删得掉）
   const busyDrop = await page.evaluate(() => {
     const row = [...document.querySelectorAll("#set-part .set-row")].find((r) =>
@@ -2712,8 +2713,8 @@ try {
     return { disabled: del?.disabled ?? null, title: del?.title ?? "" };
   });
   check(
-    "有任务的分区删除按钮是灰的",
-    busyDrop.disabled === true && busyDrop.title.includes("先移走"),
+    "有任务的分区删除按钮可用，并写明连任务一起删",
+    busyDrop.disabled === false && /连同里面 \d+ 条任务/.test(busyDrop.title),
     JSON.stringify(busyDrop),
   );
 
